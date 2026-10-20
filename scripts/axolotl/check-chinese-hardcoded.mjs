@@ -30,6 +30,7 @@ const SKIP_DIRS = new Set([
 	'.cargo',
 	'.codegraph',
 	'.omo',
+	'.claude',
 	'.opencode',
 	'.agents',
 	'.idea',

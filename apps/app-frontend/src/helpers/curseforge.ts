@@ -310,20 +310,21 @@ export function getCurseForgeDescription(projectId: number) {
 }
 
 export async function getCurseForgeFiles(projectId: number, request: CurseForgeFilesRequest) {
-    const files: CurseForgeFile[] = []
-    let pagination: CurseForgeFilesResponse['pagination'] = {
-        index: request.index ?? 0,
-        pageSize: 50,
-        resultCount: 0,
-        totalCount: 0,
-    }
-    for await (const page of curseForgeFilePages(projectId, request, true)) {
+    let page = await getCurseForgeFilesPage(projectId, request)
+    const files = [...page.files]
+    while (
+        page.files.length > 0 &&
+        page.pagination.index + page.pagination.resultCount < page.pagination.totalCount
+    ) {
+        page = await getCurseForgeFilesPage(projectId, {
+            ...request,
+            index: page.pagination.index + page.pagination.resultCount,
+        })
         files.push(...page.files)
-        pagination = page.pagination
     }
     return {
         files,
-        pagination: { ...pagination, index: request.index ?? 0, resultCount: files.length },
+        pagination: { ...page.pagination, index: request.index ?? 0, resultCount: files.length },
     }
 }
 
@@ -331,69 +332,37 @@ export async function getCurseForgeFilesPage(
     projectId: number,
     request: CurseForgeFilesRequest,
 ): Promise<CurseForgeFilesResponse> {
-    for await (const page of curseForgeFilePages(projectId, request)) return page
-    return {
-        files: [],
-        pagination: { index: request.index ?? 0, pageSize: 50, resultCount: 0, totalCount: 0 },
-    }
-}
-
-async function* curseForgeFilePages(
-    projectId: number,
-    request: CurseForgeFilesRequest,
-    requireComplete = false,
-): AsyncGenerator<CurseForgeFilesResponse> {
     const loaders: Record<number, string> = { 1: 'forge', 4: 'fabric', 5: 'quilt', 6: 'neoforge' }
-    const target = {
-        gameVersions: request.gameVersion ? [request.gameVersion] : [],
-        loaders: request.modLoaderType ? [loaders[request.modLoaderType]] : [],
-        channels: [],
+    const page = await resourceReleases(
+        sourceResource('curseforge', String(projectId)),
+        {
+            gameVersions: request.gameVersion ? [request.gameVersion] : [],
+            loaders: request.modLoaderType ? [loaders[request.modLoaderType]] : [],
+            channels: [],
+        },
+        request.index ? String(request.index) : null,
+    )
+    const documents = await resourceReleaseDocuments<CurseForgeFile>(
+        'curseforge',
+        page.entries.map((release) => release.reference.releaseId),
+        String(projectId),
+    )
+    const files = documents.map((document) => {
+        if (!document.protocol) throw new Error('Source presentation is unavailable')
+        return document.protocol
+    })
+    const index = request.index ?? 0
+    return {
+        files,
+        pagination: {
+            index,
+            pageSize: 50,
+            resultCount: files.length,
+            totalCount: page.exhaustedSources.length
+                ? index + files.length
+                : (page.total.value ?? index + files.length + (page.hasMore ? 1 : 0)),
+        },
     }
-    const requestedIndex = Math.max(0, request.index ?? 0)
-    let cursor: string | null = null
-    let index = 0
-    const seen = new Set<string>()
-    do {
-        const page = await resourceReleases(
-            sourceResource('curseforge', String(projectId)),
-            target,
-            cursor,
-        )
-        if (requireComplete && page.exhaustedSources.length > 0) {
-            throw new Error(
-                'Source release window is incomplete; choose a specific game version or file',
-            )
-        }
-        const nextIndex = index + page.entries.length
-        const hasMore = page.hasMore && page.exhaustedSources.length === 0
-        if (hasMore && (!page.cursor || seen.has(page.cursor))) {
-            throw new Error('Source returned an invalid release cursor')
-        }
-        if (nextIndex > requestedIndex || !hasMore) {
-            const entries = page.entries.slice(Math.max(0, requestedIndex - index))
-            const documents = await resourceReleaseDocuments<CurseForgeFile>(
-                'curseforge',
-                entries.map((release) => release.reference.releaseId),
-                String(projectId),
-            )
-            const files = documents.map((document) => {
-                if (!document.protocol) throw new Error('Source presentation is unavailable')
-                return document.protocol
-            })
-            yield {
-                files,
-                pagination: {
-                    index: Math.max(index, requestedIndex),
-                    pageSize: 50,
-                    resultCount: files.length,
-                    totalCount: !hasMore ? nextIndex : (page.total.value ?? nextIndex + 1),
-                },
-            }
-        }
-        index = nextIndex
-        cursor = hasMore ? page.cursor : null
-        if (cursor) seen.add(cursor)
-    } while (cursor)
 }
 
 export async function getCurseForgeFile(projectId: number, fileId: number) {

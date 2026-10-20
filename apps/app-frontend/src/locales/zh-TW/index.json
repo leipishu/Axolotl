@@ -983,6 +983,27 @@
   "app.content.install-content": {
     "message": "安裝內容"
   },
+  "app.crash-analysis.ai.action": {
+    "message": "使用 AI 解釋"
+  },
+  "app.crash-analysis.ai.analyzing": {
+    "message": "正在解釋崩潰……"
+  },
+  "app.crash-analysis.ai.close": {
+    "message": "關閉"
+  },
+  "app.crash-analysis.ai.copied": {
+    "message": "AI 解釋已複製到剪貼簿"
+  },
+  "app.crash-analysis.ai.copy": {
+    "message": "複製解釋"
+  },
+  "app.crash-analysis.ai.disclaimer": {
+    "message": "經過脫敏和裁剪的崩潰內容會直接傳送給此啟動器中設定的 AI Provider。AI 輸出可能不準確。"
+  },
+  "app.crash-analysis.ai.error": {
+    "message": "AI 解釋失敗：{message}"
+  },
   "app.crash-analysis.ai.settings.enabled": {
     "message": "啟用 AI 解釋"
   },
@@ -997,6 +1018,9 @@
   },
   "app.crash-analysis.ai.settings.provider": {
     "message": "AI Provider"
+  },
+  "app.crash-analysis.ai.title": {
+    "message": "AI 崩潰解釋"
   },
   "app.curseforge.automatic-downloads-failed.notification-body": {
     "message": "重試後仍有 {failed, number} 個文件下載失敗（{list}）。可在“下載”中查看已記錄的錯誤。"
@@ -1312,6 +1336,9 @@
   },
   "app.downloads.missing-required-content": {
     "message": "已完成 {completed} / {total} 個必要檔案，還有 {missing} 個檔案需要補全。"
+  },
+  "app.downloads.more-active-requests": {
+    "message": "另有 {count} 個進行中的請求"
   },
   "app.downloads.new-download": {
     "message": "新建下載"
@@ -4377,7 +4404,7 @@
     "message": "非官方工具"
   },
   "app.lab.seed-map.copyright.engine-body": {
-    "message": "群系、地形、出生點與結構數據由 xpple/cubiomes 和 Axolotl 原生集成在本地生成。該引擎基於 Cubitect/cubiomes，版權所有 (c) 2020 Cubitect，並依據 MIT 許可證提供。"
+    "message": "群系、地形、出生點與結構數據由 cubiomes 和 Axolotl 原生集成在本地生成。cubiomes 版權所有 (c) 2020 Cubitect，並依據 MIT 許可證提供。"
   },
   "app.lab.seed-map.copyright.engine-heading": {
     "message": "本地地圖引擎"
@@ -4625,14 +4652,23 @@
   "app.lab.seed-map.ore-layers": {
     "message": "礦物圖層"
   },
+  "app.lab.seed-map.ore-likely": {
+    "message": "可能存在"
+  },
   "app.lab.seed-map.ore-max-y": {
     "message": "最高 Y"
   },
   "app.lab.seed-map.ore-min-y": {
     "message": "最低 Y"
   },
+  "app.lab.seed-map.ore-precision": {
+    "message": "精度 {precision}%"
+  },
   "app.lab.seed-map.ore-scan-failed": {
     "message": "礦物掃描失敗，請刷新地圖後重試。"
+  },
+  "app.lab.seed-map.ore-verified": {
+    "message": "已驗證"
   },
   "app.lab.seed-map.ore-y-range": {
     "message": "Y 範圍"

@@ -1,6 +1,6 @@
 import { computeServerStatus, type ServerStatus } from '@modrinth/server'
 import { injectNotificationManager } from '@modrinth/ui'
-import { computed, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 
 import {
     base64ToBytes,
@@ -11,6 +11,8 @@ import {
 } from '@/helpers/servers'
 
 import { ServerConsoleBuffer } from './server-console-buffer'
+
+const LOG_CAPACITY = 5000
 
 /** Reacts to a classified server self-exit, e.g. opening the EULA dialog. */
 type ServerExitReasonHandler = (serverId: string, reason: ServerExitReason) => void
@@ -30,10 +32,8 @@ export function setServerExitReasonHandler(handler: ServerExitReasonHandler | nu
 }
 
 const serverList = ref<ServerInfoData[]>([])
+const logLines = reactive<Record<string, string[]>>({})
 const isRefreshing = ref(false)
-const hasLoaded = ref(false)
-const loadError = ref<unknown>(null)
-let refreshPromise: Promise<void> | null = null
 let listenerPromise: Promise<() => void> | null = null
 const consoleOutputListeners = new Map<string, Set<(data: Uint8Array) => void>>()
 const consoleOutputBuffers = new Map<string, ServerConsoleBuffer>()
@@ -54,10 +54,18 @@ export function serverStatus(server: ServerInfoData): ServerStatus {
     })
 }
 
+async function appendLog(serverId: string, line: string) {
+    const lines = (logLines[serverId] ??= [])
+    lines.push(line)
+    if (lines.length > LOG_CAPACITY) lines.splice(0, lines.length - LOG_CAPACITY)
+}
+
 async function ensureListener() {
     if (!listenerPromise) {
         listenerPromise = serverEventListener((serverId, payload) => {
-            if (payload.event === 'console_output') {
+            if (payload.event === 'log') {
+                void appendLog(serverId, payload.line)
+            } else if (payload.event === 'console_output') {
                 const data = base64ToBytes(payload.data)
                 const buffer =
                     consoleOutputBuffers.get(serverId) ??
@@ -68,15 +76,12 @@ async function ensureListener() {
                     listener(data)
                 }
             } else if (payload.event === 'started') {
-                void refresh().catch(() => {})
+                void refresh()
             } else if (payload.event === 'stopped') {
                 consoleOutputBuffers.delete(serverId)
-                void refresh().catch(() => {})
+                void refresh()
                 if (payload.reason) exitReasonHandler?.(serverId, payload.reason)
             }
-        }).catch((error) => {
-            listenerPromise = null
-            throw error
         })
     }
     return listenerPromise
@@ -97,24 +102,32 @@ export function subscribeServerConsoleOutput(
     }
 }
 
-export function refresh(): Promise<void> {
-    if (refreshPromise) return refreshPromise
-    isRefreshing.value = true
-    loadError.value = null
-    refreshPromise = (async () => {
-        try {
-            await ensureListener()
-            serverList.value = await servers.list()
-            hasLoaded.value = true
-        } catch (error) {
-            loadError.value = error
-            throw error
-        } finally {
-            isRefreshing.value = false
-            refreshPromise = null
+export async function hydrateLog(serverId: string) {
+    try {
+        const buffer = await servers.getLogBuffer(serverId)
+        // The backend log buffer is the authoritative, lossless source: the
+        // per-line `server` events can be dropped in bursts (e.g. the server's
+        // startup or a `help` dump), but every line is still persisted there.
+        // Reconcile by appending only the lines we haven't displayed yet rather
+        // than blindly replacing, so live events and this catch-up stay in sync.
+        const current = (logLines[serverId] ??= [])
+        if (buffer.length > current.length) {
+            for (const line of buffer.slice(current.length)) current.push(line)
         }
-    })()
-    return refreshPromise
+    } catch {
+        // Server may not have logs yet
+    }
+}
+
+export async function refresh(): Promise<void> {
+    if (isRefreshing.value) return
+    isRefreshing.value = true
+    try {
+        await ensureListener()
+        serverList.value = await servers.list()
+    } finally {
+        isRefreshing.value = false
+    }
 }
 
 export function useServers() {
@@ -140,6 +153,7 @@ export function useServers() {
 
     async function startServer(serverId: string) {
         await ensureListener()
+        logLines[serverId] = []
         const ok = await run(() => servers.start(serverId))
         if (ok) await refresh()
         return ok
@@ -156,6 +170,7 @@ export function useServers() {
     async function deleteServer(serverId: string) {
         const ok = await run(() => servers.delete(serverId))
         if (ok) {
+            logLines[serverId] = []
             await refresh()
         }
         return ok
@@ -168,9 +183,8 @@ export function useServers() {
     return {
         servers: serverViews,
         rawServers: serverList,
+        logLines,
         isRefreshing,
-        hasLoaded,
-        loadError,
         refresh: refreshList,
         startServer,
         stopServer,

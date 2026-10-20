@@ -47,7 +47,7 @@ pub(crate) use self::refresh_instances::*;
 
 mod sync_content_files;
 pub(crate) use self::sync_content_files::{
-    instance_content_root, sync_content_files, sync_content_files_for_operation,
+    instance_content_root, sync_content_files,
 };
 
 mod launch_context;

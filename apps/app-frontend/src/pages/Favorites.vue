@@ -13,7 +13,6 @@ import {
     SpinnerIcon,
 } from '@modrinth/assets'
 import {
-    Admonition,
     type BrowseInstallContext,
     BrowseInstallHeader,
     Button,
@@ -108,8 +107,11 @@ const { handleError } = injectNotificationManager()
 const contentSelection = injectContentSelection()
 const contentFavorites = useContentFavorites()
 const instanceSelector = ref<InstanceType<typeof BrowseInstanceSelector>>()
-const stickyChromeRef = ref<HTMLElement | null>(null)
-const { isStuck: isChromeStuck } = useStickyObserver(stickyChromeRef, 'FavoritesToolbarChrome')
+const stickyInstallHeaderRef = ref<HTMLElement | null>(null)
+const { isStuck: isInstallHeaderStuck } = useStickyObserver(
+    stickyInstallHeaderRef,
+    'FavoritesInstallHeader',
+)
 const projects = shallowRef<FavoriteProject[]>([])
 let projectsController: AbortController | null = null
 const loadingProjects = ref(false)
@@ -120,22 +122,8 @@ const browseReturnSnapshot = navReturn.consumeBrowseReturnSnapshot<FavoritesRetu
     route.fullPath,
 )
 if (browseReturnSnapshot) projects.value = browseReturnSnapshot.state.projects
-const projectsLoadFailed = ref(false)
-const hasProjectsSnapshot = ref(!!browseReturnSnapshot)
 
 const messages = defineMessages({
-    browseResources: {
-        id: 'app.content-favorites.browse-resources',
-        defaultMessage: 'Browse resources',
-    },
-    clearFilters: {
-        id: 'app.content-favorites.clear-filters',
-        defaultMessage: 'Clear search and filters',
-    },
-    loadFailed: {
-        id: 'app.content-favorites.load-failed',
-        defaultMessage: 'Failed to load favorites',
-    },
     title: {
         id: 'app.content-favorites.title',
         defaultMessage: 'Favorites',
@@ -275,15 +263,6 @@ function updateQuery(values: Record<string, string | undefined>) {
     })
 }
 
-function browseResources() {
-    const { q: _q, kind: _kind, page: _page, ...query } = route.query
-    void router.push({ path: '/browse/mod', query })
-}
-
-function clearFilters() {
-    updateQuery({ q: undefined, kind: undefined, page: undefined })
-}
-
 const search = computed({
     get: () => queryValue(route.query.q),
     set: (value: string) => updateQuery({ q: value || undefined, page: undefined }),
@@ -396,7 +375,6 @@ async function refreshProjects() {
     projectsController = new AbortController()
     const signal = projectsController.signal
     loadingProjects.value = true
-    projectsLoadFailed.value = false
     try {
         await contentFavorites.load(true)
         const favorites = [...contentFavorites.favorites.value]
@@ -432,12 +410,9 @@ async function refreshProjects() {
                 }
             }),
         )
-        if (requestId === projectRequestId && !signal.aborted) {
-            projects.value = resolved
-            hasProjectsSnapshot.value = true
-        }
-    } catch {
-        if (requestId === projectRequestId && !signal.aborted) projectsLoadFailed.value = true
+        if (requestId === projectRequestId && !signal.aborted) projects.value = resolved
+    } catch (error) {
+        if (!signal.aborted) handleError(error)
     } finally {
         if (requestId === projectRequestId) loadingProjects.value = false
     }
@@ -720,137 +695,114 @@ onMounted(async () => {
 <template>
     <div data-onboarding-id="browse-favorites-content" class="flex flex-col gap-3 p-6">
         <div
-            ref="stickyChromeRef"
-            class="browse-toolbar-chrome sticky top-0 z-20 -mx-6 -mt-6 flex flex-col gap-3 rounded-tl-[--radius-xl] rounded-tr-[--radius-xl] border-0 border-b border-solid border-surface-5 bg-[color-mix(in_srgb,var(--surface-1-opaque,var(--surface-1))_20%,transparent)] backdrop-blur-xl"
-            :class="isChromeStuck ? 'border-t shadow-[0_8px_16px_-12px_rgba(0,0,0,0.35)]' : ''"
+            v-if="installContext?.showInstallHeader"
+            ref="stickyInstallHeaderRef"
+            class="browse-install-header sticky top-0 z-20 -mx-6 -mt-6 rounded-tl-[--radius-xl] border-0 border-b border-solid bg-surface-1 p-3 border-surface-5"
+            :class="[isInstallHeaderStuck ? 'border-t' : '']"
         >
-            <div v-if="installContext?.showInstallHeader" class="p-3 pb-0">
-                <BrowseInstallHeader :install-context="installContext" />
-            </div>
-
-            <div class="flex flex-col gap-3 p-3">
-                <div class="flex min-w-0 items-center gap-2">
-                    <NavTabs :links="projectTabs" class="min-w-0" />
-                </div>
-
-                <div class="flex flex-wrap items-center gap-2">
-                    <StyledInput
-                        v-model="search"
-                        :icon="SearchIcon"
-                        type="text"
-                        autocomplete="off"
-                        clearable
-                        :placeholder="formatMessage(messages.search)"
-                        wrapper-class="flex-1"
-                        input-class="h-12"
-                    />
-                    <Button
-                        size="md"
-                        class="flex min-w-0 items-center gap-2"
-                        @click="instanceSelector?.show()"
-                        ><InstanceIcon
-                            v-if="contentSelection.targetInstance.value"
-                            class="shrink-0"
-                            size="1.25rem"
-                            :icon-path="contentSelection.targetInstance.value.icon_path"
-                            :instance-id="contentSelection.targetInstance.value.id"
-                            :loader="contentSelection.targetInstance.value.loader"
-                        />
-                        <PlusIcon v-else class="size-5 shrink-0" />
-                        <span class="max-w-40 truncate font-medium">
-                            {{
-                                contentSelection.targetInstance.value?.name ??
-                                formatMessage(messages.chooseInstance)
-                            }}
-                        </span>
-                        <span
-                            aria-hidden="true"
-                            class="flex size-4 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]"
-                        >
-                            <ChevronDownIcon class="size-4" />
-                        </span>
-                    </Button>
-                    <PopoutMenu placement="bottom-end">
-                        <Button size="md" class="flex items-center gap-2"
-                            ><BookmarkIcon class="size-5" />
-                            <span>{{ currentFavoriteTypeLabel }}</span>
-                        </Button>
-                        <template #menu>
-                            <div class="flex w-48 flex-col gap-1 p-1">
-                                <Button
-                                    v-for="option in favoriteTypeOptions"
-                                    :key="option.id"
-                                    :type="filter === option.id ? 'colored' : 'quiet'"
-                                    class="flex w-full !justify-start text-left"
-                                    :aria-pressed="filter === option.id"
-                                    @click="filter = option.id"
-                                >
-                                    {{ option.label }}
-                                </Button>
-                            </div>
-                        </template>
-                    </PopoutMenu>
-                </div>
-
-                <div class="flex flex-wrap items-center gap-2">
-                    <span class="text-sm font-medium text-[var(--color-text-tertiary)]">{{
-                        formatMessage(messages.recentlySaved)
-                    }}</span>
-                    <PopoutMenu
-                        :tooltip="formatMessage(messages.view)"
-                        placement="bottom-end"
-                        class="ml-auto"
-                    >
-                        <Button circular icon-only :aria-label="formatMessage(messages.view)"
-                            ><component :is="currentDisplayMode?.icon" />
-                        </Button>
-                        <template #menu>
-                            <div class="flex w-44 flex-col gap-1 p-1">
-                                <Button
-                                    v-for="option in displayModeOptions"
-                                    :key="option.id"
-                                    :type="displayMode === option.id ? 'colored' : 'quiet'"
-                                    class="flex w-full items-center gap-2 !justify-start text-left"
-                                    :aria-pressed="displayMode === option.id"
-                                    @click="setDisplayMode(option.id)"
-                                >
-                                    <component :is="option.icon" class="size-4" />
-                                    {{ option.label }}
-                                </Button>
-                            </div>
-                        </template>
-                    </PopoutMenu>
-                    <Pagination
-                        :page="currentPage"
-                        :count="pageCount"
-                        @switch-page="currentPage = $event"
-                    />
-                </div>
-            </div>
+            <BrowseInstallHeader :install-context="installContext" />
         </div>
 
-        <Admonition
-            v-if="projectsLoadFailed && hasProjectsSnapshot"
-            type="warning"
-            :header="formatMessage(messages.loadFailed)"
-        >
-            <Button type="outlined" :loading="loadingProjects" @click="refreshProjects">{{
-                formatMessage(commonMessages.retryButton)
-            }}</Button>
-        </Admonition>
-        <EmptyState
-            v-if="projectsLoadFailed && !hasProjectsSnapshot"
-            type="error"
-            :heading="formatMessage(messages.loadFailed)"
-        >
-            <template #actions>
-                <Button type="outlined" :loading="loadingProjects" @click="refreshProjects">{{
-                    formatMessage(commonMessages.retryButton)
-                }}</Button>
-            </template>
-        </EmptyState>
+        <div class="flex min-h-12 items-center justify-between">
+            <NavTabs :links="projectTabs" />
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+            <StyledInput
+                v-model="search"
+                :icon="SearchIcon"
+                type="text"
+                autocomplete="off"
+                clearable
+                :placeholder="formatMessage(messages.search)"
+                wrapper-class="flex-1"
+                input-class="h-12"
+            />
+            <Button
+                size="md"
+                class="flex min-w-0 items-center gap-2"
+                @click="instanceSelector?.show()"
+                ><InstanceIcon
+                    v-if="contentSelection.targetInstance.value"
+                    class="shrink-0"
+                    size="1.25rem"
+                    :icon-path="contentSelection.targetInstance.value.icon_path"
+                    :instance-id="contentSelection.targetInstance.value.id"
+                    :loader="contentSelection.targetInstance.value.loader"
+                />
+                <PlusIcon v-else class="size-5 shrink-0" />
+                <span class="max-w-40 truncate font-medium">
+                    {{
+                        contentSelection.targetInstance.value?.name ??
+                        formatMessage(messages.chooseInstance)
+                    }}
+                </span>
+                <span
+                    aria-hidden="true"
+                    class="flex size-4 shrink-0 items-center justify-center text-[var(--color-text-tertiary)]"
+                >
+                    <ChevronDownIcon class="size-4" />
+                </span>
+            </Button>
+            <PopoutMenu placement="bottom-end">
+                <Button size="md" class="flex items-center gap-2"
+                    ><BookmarkIcon class="size-5" />
+                    <span>{{ currentFavoriteTypeLabel }}</span>
+                </Button>
+                <template #menu>
+                    <div class="flex w-48 flex-col gap-1 p-1">
+                        <Button
+                            v-for="option in favoriteTypeOptions"
+                            :key="option.id"
+                            :type="filter === option.id ? 'colored' : 'quiet'"
+                            class="flex w-full !justify-start text-left"
+                            :aria-pressed="filter === option.id"
+                            @click="filter = option.id"
+                        >
+                            {{ option.label }}
+                        </Button>
+                    </div>
+                </template>
+            </PopoutMenu>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-2">
+            <span class="text-sm font-medium text-[var(--color-text-tertiary)]">{{
+                formatMessage(messages.recentlySaved)
+            }}</span>
+            <PopoutMenu
+                :tooltip="formatMessage(messages.view)"
+                placement="bottom-end"
+                class="ml-auto"
+            >
+                <Button circular icon-only :aria-label="formatMessage(messages.view)"
+                    ><component :is="currentDisplayMode?.icon" />
+                </Button>
+                <template #menu>
+                    <div class="flex w-44 flex-col gap-1 p-1">
+                        <Button
+                            v-for="option in displayModeOptions"
+                            :key="option.id"
+                            :type="displayMode === option.id ? 'colored' : 'quiet'"
+                            class="flex w-full items-center gap-2 !justify-start text-left"
+                            :aria-pressed="displayMode === option.id"
+                            @click="setDisplayMode(option.id)"
+                        >
+                            <component :is="option.icon" class="size-4" />
+                            {{ option.label }}
+                        </Button>
+                    </div>
+                </template>
+            </PopoutMenu>
+            <Pagination
+                :page="currentPage"
+                :count="pageCount"
+                @switch-page="currentPage = $event"
+            />
+        </div>
+
         <section
-            v-else-if="!hasProjectsSnapshot && !projectsLoadFailed"
+            v-if="loadingProjects && availableProjects.length === 0"
             class="flex min-h-64 items-center justify-center"
         >
             <LoadingIndicator />
@@ -862,25 +814,13 @@ onMounted(async () => {
             type="empty-inbox"
             :heading="formatMessage(messages.emptyTitle)"
             :description="formatMessage(messages.emptyDescription)"
-        >
-            <template #actions>
-                <Button type="colored" color="brand" @click="browseResources">{{
-                    formatMessage(messages.browseResources)
-                }}</Button>
-            </template>
-        </EmptyState>
+        />
         <EmptyState
             v-else-if="filteredProjects.length === 0"
             type="no-search-result"
             :heading="formatMessage(messages.noMatchesTitle)"
             :description="formatMessage(messages.noMatchesDescription)"
-        >
-            <template #actions>
-                <Button type="outlined" @click="clearFilters">{{
-                    formatMessage(messages.clearFilters)
-                }}</Button>
-            </template>
-        </EmptyState>
+        />
         <ProjectCardList v-else :layout="displayMode">
             <ProjectCard
                 v-for="project in pagedProjects"

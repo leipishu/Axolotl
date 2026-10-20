@@ -1163,6 +1163,7 @@ mod tests {
             builder.handshake::<_, Bytes>(client_io).await.unwrap();
         driver.set_target_window_size(64 * 1024 * 1024);
         let client_driver = tokio::spawn(driver);
+        let connection = Arc::new(SharedH2Connection::for_test(sender));
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("pack.mrpack");
         let part_path = directory.path().join("pack.mrpack.part");
@@ -1182,8 +1183,6 @@ mod tests {
             supports_range: true,
             proxy: fetch::ProxyPolicy::Direct,
         };
-        let connection =
-            SharedH2Connection::cache_for_test(&route, sender).await;
         let uri = route.url.parse().unwrap();
 
         let result = download(
@@ -1239,12 +1238,13 @@ mod tests {
 
         let (sender, driver) = h2::client::handshake(client_io).await.unwrap();
         let client_driver = tokio::spawn(driver);
+        let connection = Arc::new(SharedH2Connection::for_test(sender));
         let directory = tempfile::tempdir().unwrap();
         let destination = directory.path().join("pack.zip");
         let part_path = directory.path().join("pack.zip.part");
         let cancellation = tokio_util::sync::CancellationToken::new();
         let mut request = DownloadRequest::new(
-            "https://h2-range-cancel.test/pack.zip",
+            "https://h2-range.test/pack.zip",
             fetch::ResourceClass::CurseForge,
         )
         .with_integrity(fetch::Integrity::default().with_size(2 * 1024 * 1024));
@@ -1257,8 +1257,6 @@ mod tests {
             supports_range: true,
             proxy: fetch::ProxyPolicy::Direct,
         };
-        let connection =
-            SharedH2Connection::cache_for_test(&route, sender).await;
         let uri = route.url.parse().unwrap();
         let part_for_task = part_path.clone();
         let destination_for_task = destination.clone();

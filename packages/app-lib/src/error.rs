@@ -237,16 +237,6 @@ pub struct Error {
     context: Option<String>,
 }
 
-impl Error {
-    pub(crate) fn from_shared_kind(raw: Arc<ErrorKind>) -> Self {
-        Self {
-            source: Arc::clone(&raw).in_current_span(),
-            raw,
-            context: None,
-        }
-    }
-}
-
 impl std::error::Error for Error {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         self.source.source()

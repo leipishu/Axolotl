@@ -1,5 +1,4 @@
 import { parseIdentifier } from './identifier.ts'
-import { parseRecipeJsonObject } from './recipe-engine.ts'
 import type {
     JavaVersionId,
     RecipeSlot,
@@ -16,8 +15,6 @@ import {
 
 export type RecipeIssueCode =
     | 'unsupported-type'
-    | 'invalid-brewing-json'
-    | 'invalid-result-count'
     | 'missing-ingredient'
     | 'missing-result'
     | 'missing-template'
@@ -40,7 +37,6 @@ const RESULT_SLOTS = new Set<RecipeSlot>([
     'cooking.result',
     'stonecutter.result',
     'smithing.result',
-    'brewing.result',
 ])
 
 function isTagValue(value: SlotValue): boolean {
@@ -100,24 +96,6 @@ export function validateRecipe(
         }
     }
 
-    if (state.recipeType === 'brewing') {
-        const result = state.slots['brewing.result']
-        if (
-            result &&
-            'count' in result &&
-            result.count !== undefined &&
-            (!Number.isInteger(result.count) || result.count < 1 || result.count > 99)
-        )
-            issues.push({ code: 'invalid-result-count' })
-        for (const field of ['inputPredicate', 'reagentPredicate', 'outputComponents'] as const) {
-            try {
-                parseRecipeJsonObject(state.brewing?.[field] ?? '')
-            } catch {
-                issues.push({ code: 'invalid-brewing-json' })
-                break
-            }
-        }
-    }
     const typeIssues = validateTypeRules(state, version)
     return [...issues, ...typeIssues]
 }
@@ -125,11 +103,6 @@ export function validateRecipe(
 function validateTypeRules(state: RecipeState, version: JavaVersionId): RecipeIssue[] {
     const issues: RecipeIssue[] = []
     switch (state.recipeType) {
-        case 'brewing':
-            if (!state.slots['brewing.input'] || !state.slots['brewing.reagent'])
-                issues.push({ code: 'missing-ingredient' })
-            if (!state.slots['brewing.result']) issues.push({ code: 'missing-result' })
-            break
         case 'crafting': {
             const hasIngredient = Object.keys(state.slots).some(
                 (slot) =>

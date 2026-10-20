@@ -9,18 +9,15 @@ export type SeedMapMarker = {
     x: number
     z: number
     color: string
-    dimension: SeedMapDimension
 }
 
 export type SeedMapWorkspace = {
-    version: 4
+    version: 3
     seed: string
     edition: SeedMapEdition
     gameVersion: string
     dimension: SeedMapDimension
     displayMode: SeedMapDisplayMode
-    undergroundLayers: number
-    undergroundY: number
     center: { x: number; z: number }
     zoom: number
     elevation: number
@@ -51,14 +48,12 @@ export const SEED_MAP_ELEVATIONS = [128, 16, -32] as const
 
 export function createDefaultSeedMapWorkspace(): SeedMapWorkspace {
     return {
-        version: 4,
+        version: 3,
         seed: '10292992',
         edition: 'java',
         gameVersion: SEED_MAP_DEFAULT_VERSION,
         dimension: 'overworld',
         displayMode: 'structures',
-        undergroundLayers: 7,
-        undergroundY: 16,
         center: { x: 0, z: 0 },
         zoom: 1,
         elevation: SEED_MAP_ELEVATIONS[0],
@@ -139,7 +134,7 @@ export function sanitizeSeedMapWorkspace(
     const oreYMin = nullableInteger(source.oreYMin, -144, 319)
     const oreYMax = nullableInteger(source.oreYMax, -144, 319)
     return {
-        version: 4,
+        version: 3,
         seed:
             typeof source.seed === 'string' && source.seed.trim()
                 ? source.seed.trim().slice(0, 256)
@@ -151,15 +146,7 @@ export function sanitizeSeedMapWorkspace(
             source.dimension === 'nether' || source.dimension === 'end'
                 ? source.dimension
                 : 'overworld',
-        displayMode:
-            source.displayMode === 'ores' || source.displayMode === 'underground'
-                ? source.displayMode
-                : 'structures',
-        undergroundLayers: Math.trunc(finiteNumber(source.undergroundLayers, 7)) & 7,
-        undergroundY: Math.max(
-            -64,
-            Math.min(319, Math.trunc(finiteNumber(source.undergroundY, 16))),
-        ),
+        displayMode: source.displayMode === 'ores' ? 'ores' : 'structures',
         center: {
             x: finiteNumber(center.x, fallback.center.x),
             z: finiteNumber(center.z, fallback.center.z),
@@ -202,8 +189,6 @@ export function createShareQuery(workspace: SeedMapWorkspace): Record<string, st
         version: workspace.gameVersion,
         dimension: workspace.dimension,
         mode: workspace.displayMode,
-        undergroundY: String(workspace.undergroundY),
-        undergroundLayers: String(workspace.undergroundLayers),
         ores: workspace.selectedOres.join(','),
         yMin: workspace.oreYMin === null ? '' : String(workspace.oreYMin),
         yMax: workspace.oreYMax === null ? '' : String(workspace.oreYMax),
@@ -224,12 +209,10 @@ export function applyShareQuery(
     return sanitizeSeedMapWorkspace({
         ...workspace,
         seed: typeof query.seed === 'string' ? query.seed : workspace.seed,
-        edition: query.edition ?? workspace.edition,
+        edition: query.edition,
         gameVersion: typeof query.version === 'string' ? query.version : workspace.gameVersion,
-        dimension: query.dimension ?? workspace.dimension,
-        displayMode: query.mode ?? workspace.displayMode,
-        undergroundY: parseQueryNumber(query.undergroundY, workspace.undergroundY),
-        undergroundLayers: parseQueryNumber(query.undergroundLayers, workspace.undergroundLayers),
+        dimension: query.dimension,
+        displayMode: query.mode,
         selectedOres:
             typeof query.ores === 'string' && query.ores.length > 0
                 ? query.ores.split(',')
@@ -317,10 +300,6 @@ function sanitizeMarkers(value: unknown): SeedMapMarker[] {
                     name: source.name.slice(0, 128),
                     x: Math.round(source.x as number),
                     z: Math.round(source.z as number),
-                    dimension:
-                        source.dimension === 'nether' || source.dimension === 'end'
-                            ? source.dimension
-                            : ('overworld' as SeedMapDimension),
                     color:
                         typeof source.color === 'string' && /^#[0-9A-Fa-f]{6}$/.test(source.color)
                             ? source.color

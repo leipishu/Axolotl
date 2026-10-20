@@ -10,7 +10,6 @@ import {
 import {
     Button,
     Chips,
-    commonMessages,
     defineMessages,
     injectFilePicker,
     injectNotificationManager,
@@ -33,7 +32,6 @@ import { createInstanceShortcutOnDesktop } from '@/helpers/utils'
 import { injectInstanceSettings } from '@/providers/instance-settings'
 
 import type { GameInstance } from '../../../helpers/types'
-import { INSTANCE_NAME_MAX_LENGTH, useInstanceName } from './use-instance-name'
 
 const { addNotification, handleError } = injectNotificationManager()
 const filePicker = injectFilePicker()
@@ -47,15 +45,7 @@ const { instance } = injectInstanceSettings()
 type ReleaseChannel = GameInstance['update_channel']
 const releaseChannelOptions: ReleaseChannel[] = ['release', 'beta', 'alpha']
 
-const instanceId = instance.value.id
-const {
-    title,
-    saving: savingName,
-    failed: nameSaveFailed,
-    invalid: nameInvalid,
-    saveName,
-    normalize: normalizeName,
-} = useInstanceName(instanceId, instance.value.name, (name) => edit(instanceId, { name }))
+const title = ref(instance.value.name)
 const icon: Ref<string | undefined> = ref(instance.value.icon_path)
 const savingReleaseChannel = ref(false)
 const selectedReleaseChannel = ref<ReleaseChannel>(instance.value.update_channel)
@@ -274,9 +264,21 @@ async function setGameDirMode(mode: GameDirMode) {
     }
 }
 
+const editInstanceObject = computed(() => ({
+    name: title.value.trim().substring(0, 32) ?? 'Instance',
+}))
+
+watch(
+    title,
+    async () => {
+        if (removing.value) return
+        await edit(instance.value.id, editInstanceObject.value).catch(handleError)
+    },
+    { deep: true },
+)
+
 const removing = ref(false)
 async function removeInstance() {
-    if (removing.value) return
     removing.value = true
     const path = instance.value.id
 
@@ -285,24 +287,11 @@ async function removeInstance() {
         game_version: instance.value.game_version,
     })
 
-    try {
-        await saveName()
-        await remove(path)
-        await router.push({ path: '/' })
-    } finally {
-        removing.value = false
-    }
+    await router.push({ path: '/' })
+    await remove(path).catch(handleError)
 }
 
 const messages = defineMessages({
-    nameRequired: {
-        id: 'instance.settings.general.name-required',
-        defaultMessage: 'Enter a name with no more than 80 characters.',
-    },
-    nameSaveFailed: {
-        id: 'instance.settings.general.name-save-failed',
-        defaultMessage: 'The name could not be saved.',
-    },
     icon: {
         id: 'instance.settings.tabs.general.icon',
         defaultMessage: 'Icon',
@@ -454,8 +443,7 @@ const messages = defineMessages({
         ref="deleteConfirmModal"
         :instance-id="instance.id"
         :symlink-target="instance.symlink_target"
-        :instances="[instance]"
-        :delete-action="removeInstance"
+        @delete="removeInstance"
     />
     <div class="block">
         <div class="float-end ml-10 relative group w-fit">
@@ -522,39 +510,10 @@ const messages = defineMessages({
                 id="instance-name"
                 v-model="title"
                 autocomplete="off"
-                :maxlength="INSTANCE_NAME_MAX_LENGTH"
-                :disabled="removing"
-                :error="nameInvalid || nameSaveFailed"
-                :aria-describedby="
-                    nameInvalid || nameSaveFailed ? 'instance-name-error' : undefined
-                "
+                :maxlength="80"
                 wrapper-class="flex-grow"
-                @blur="normalizeName"
             />
         </div>
-        <p
-            v-if="nameInvalid || nameSaveFailed"
-            id="instance-name-error"
-            class="mb-0 mt-2 text-sm text-red"
-        >
-            {{ formatMessage(nameInvalid ? messages.nameRequired : messages.nameSaveFailed) }}
-            <Button
-                v-if="nameSaveFailed && !nameInvalid"
-                type="quiet"
-                size="2xs"
-                :loading="savingName"
-                @click="saveName"
-            >
-                {{ formatMessage(commonMessages.retryButton) }}
-            </Button>
-        </p>
-        <p
-            v-else-if="savingName"
-            class="mb-0 mt-2 text-sm text-[var(--color-text-tertiary)]"
-            role="status"
-        >
-            {{ formatMessage(commonMessages.savingButton) }}
-        </p>
         <template v-if="instance.install_stage == 'installed'">
             <div class="flex flex-col gap-2.5 mt-6">
                 <h2

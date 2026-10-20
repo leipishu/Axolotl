@@ -36,15 +36,8 @@ pub(crate) struct H2ProgressGate {
 
 impl H2ProgressGate {
     pub(crate) fn new(total_size: u64) -> Self {
-        Self::with_starting_bytes(total_size, 0)
-    }
-
-    pub(crate) fn with_starting_bytes(
-        total_size: u64,
-        starting_bytes: u64,
-    ) -> Self {
         Self {
-            last_reported: starting_bytes,
+            last_reported: 0,
             last_reported_at: Instant::now(),
             threshold: MIN_PROGRESS_BYTES.max(total_size / 200),
         }
@@ -122,17 +115,6 @@ mod tests {
         assert!(!gate.should_report(320 * 1024, total));
         assert!(gate.should_report(total, total));
         assert!(!gate.should_report(total, total));
-    }
-
-    #[test]
-    fn resumed_progress_waits_for_new_bytes_and_reports_on_time() {
-        let total = 2 * 1024 * 1024;
-        let starting = 1024 * 1024;
-        let mut gate = H2ProgressGate::with_starting_bytes(total, starting);
-        assert!(!gate.should_report(starting + 4096, total));
-        gate.last_reported_at = Instant::now() - MAX_PROGRESS_WAIT;
-        assert!(!gate.should_report(starting, total));
-        assert!(gate.should_report(starting + 4096, total));
     }
 
     #[test]

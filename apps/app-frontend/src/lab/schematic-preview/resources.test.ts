@@ -5,7 +5,6 @@ import { CanvasTexture, LinearFilter, NearestFilter } from 'three'
 
 import {
     configureSchematicTexture,
-    minecraftVersionFromDataVersion,
     resolveSchematicBlockName,
     resolveSchematicMaterialTexture,
 } from './resources.ts'
@@ -96,11 +95,4 @@ test('material previews fall back to conventional texture names', () => {
     }
 
     assert.deepEqual(resolveSchematicMaterialTexture('example:polished_tile', resources), uv)
-})
-
-test('26.3 DataVersion is recognized without promoting snapshot or future worlds', () => {
-    assert.equal(minecraftVersionFromDataVersion(5023), '26.3')
-    assert.equal(minecraftVersionFromDataVersion(4903), '26.2')
-    assert.equal(minecraftVersionFromDataVersion(5005), undefined)
-    assert.equal(minecraftVersionFromDataVersion(9999), undefined)
 })

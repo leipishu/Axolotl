@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { beforeEach, expect, it, vi } from 'vitest'
+import { expect, it, vi } from 'vitest'
 
 import LabRecipeGenerator from './LabRecipeGenerator.vue'
 
@@ -76,15 +76,8 @@ vi.mock('@modrinth/ui', async () => {
     }
 })
 
-beforeEach(() => localStorage.removeItem('axolotl.lab.recipe-generator.v1'))
-
 it('row clone and delete operate on that row while another recipe is selected', async () => {
-    const wrapper = mount(LabRecipeGenerator, {
-        global: {
-            directives: { tooltip: () => {} },
-            provide: { replayOnboarding: async () => {} },
-        },
-    })
+    const wrapper = mount(LabRecipeGenerator, { global: { directives: { tooltip: () => {} } } })
     try {
         await flushPromises()
         const group = () => wrapper.get('input[placeholder="Group"]')
@@ -121,20 +114,15 @@ it('row clone and delete operate on that row while another recipe is selected', 
 it('keeps resources and loading state owned by the latest selected version', async () => {
     resourceLoads.deferred = true
     resourceLoads.pending = []
-    const wrapper = mount(LabRecipeGenerator, {
-        global: {
-            directives: { tooltip: () => {} },
-            provide: { replayOnboarding: async () => {} },
-        },
-    })
+    const wrapper = mount(LabRecipeGenerator, { global: { directives: { tooltip: () => {} } } })
     try {
         await flushPromises()
-        expect(resourceLoads.pending.map(({ version }) => version)).toEqual(['26.3'])
+        expect(resourceLoads.pending.map(({ version }) => version)).toEqual(['26.2'])
         ;(wrapper.vm as { store: { selectedVersion: string } }).store.selectedVersion = '1.20'
         await flushPromises()
-        expect(resourceLoads.pending.map(({ version }) => version)).toEqual(['26.3', '1.20'])
+        expect(resourceLoads.pending.map(({ version }) => version)).toEqual(['26.2', '1.20'])
         const oldResult = {
-            version: '26.3',
+            version: '26.2',
             items: [{ id: 'old' }],
             itemsById: {},
             vanillaTags: {},
@@ -155,62 +143,5 @@ it('keeps resources and loading state owned by the latest selected version', asy
     } finally {
         resourceLoads.deferred = false
         wrapper.unmount()
-    }
-})
-
-it('keeps brewing fields across incompatible versions and restores saved projects', async () => {
-    const wrapper = mount(LabRecipeGenerator, {
-        global: {
-            directives: { tooltip: () => {} },
-            provide: { replayOnboarding: async () => {} },
-        },
-    })
-    const vm = wrapper.vm as unknown as {
-        store: {
-            selectedVersion: string
-            recipes: {
-                recipeType: string
-                brewing: { outputPotion: string }
-                slots: Record<string, unknown>
-            }[]
-        }
-        setRecipeType: (type: string) => void
-        generatedJson: unknown
-    }
-    await flushPromises()
-    vm.setRecipeType('brewing')
-    vm.store.recipes[0].slots = {
-        'brewing.input': { kind: 'item', id: 'minecraft:potion' },
-        'brewing.reagent': { kind: 'item', id: 'minecraft:nether_wart' },
-        'brewing.result': { kind: 'item', id: 'minecraft:potion', count: 2 },
-    }
-    vm.store.recipes[0].brewing.outputPotion = 'minecraft:awkward'
-    await flushPromises()
-    expect(wrapper.find('[data-onboarding-id="recipe-brewing-editor"]').exists()).toBe(true)
-    expect(vm.generatedJson).toMatchObject({ type: 'minecraft:brewing', output: { count: 2 } })
-    ;(vm.store.recipes[0].slots['brewing.result'] as { count: number }).count = 99
-    await flushPromises()
-    await wrapper.get('[data-recipe-slot="brewing.result"]').trigger('wheel', { deltaY: 1 })
-    expect((vm.store.recipes[0].slots['brewing.result'] as { count: number }).count).toBe(98)
-    vm.store.selectedVersion = '26.2'
-    await flushPromises()
-    expect(vm.store.recipes[0].recipeType).toBe('brewing')
-    expect(vm.store.recipes[0].brewing.outputPotion).toBe('minecraft:awkward')
-    expect(vm.generatedJson).toBeNull()
-    wrapper.unmount()
-    const restored = mount(LabRecipeGenerator, {
-        global: {
-            directives: { tooltip: () => {} },
-            provide: { replayOnboarding: async () => {} },
-        },
-    })
-    try {
-        await flushPromises()
-        const project = (restored.vm as unknown as { store: typeof vm.store }).store
-        expect(project.selectedVersion).toBe('26.2')
-        expect(project.recipes[0].recipeType).toBe('brewing')
-        expect(project.recipes[0].brewing.outputPotion).toBe('minecraft:awkward')
-    } finally {
-        restored.unmount()
     }
 })

@@ -32,7 +32,6 @@ const settingsComponentFiles = {
     ],
     'content-downloads': ['./AppearanceSettings.vue', './ResourceManagementSettings.vue'],
     'network-multiplayer': ['./ResourceManagementSettings.vue', './MultiplayerSettings.vue'],
-    'network-connection': ['./NetworkConnectionSettings.vue'],
     'storage-backups': [
         './ResourceManagementSettings.vue',
         './StorageBackupSettings.vue',
@@ -188,12 +187,7 @@ test('settings navigation groups preserve the intended Axolotl information archi
         'network-multiplayer',
     ])
     assert.deepEqual(categoriesForGroup('data-privacy'), ['storage-backups', 'privacy-data'])
-    assert.deepEqual(categoriesForGroup('support'), [
-        'updates',
-        'about',
-        'network-connection',
-        'logs',
-    ])
+    assert.deepEqual(categoriesForGroup('support'), ['updates', 'about', 'logs'])
     assert.deepEqual(categoriesForGroup('developer'), [])
     assert.deepEqual(categoriesForGroup('developer', true), ['feature-flags'])
 })

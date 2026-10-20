@@ -84,7 +84,7 @@ const currentDeleteInstance = ref(null)
 
 async function deleteInstance() {
     if (currentDeleteInstance.value) {
-        await remove(currentDeleteInstance.value.id)
+        await remove(currentDeleteInstance.value.id).catch(handleError)
     }
 }
 
@@ -280,8 +280,7 @@ onUnmounted(() => {
         ref="deleteConfirmModal"
         :instance-id="currentDeleteInstance?.id"
         :symlink-target="currentDeleteInstance?.symlink_target"
-        :instances="currentDeleteInstance ? [currentDeleteInstance] : []"
-        :delete-action="deleteInstance"
+        @delete="deleteInstance"
     />
     <div ref="rowContainer" class="flex flex-col gap-4">
         <div

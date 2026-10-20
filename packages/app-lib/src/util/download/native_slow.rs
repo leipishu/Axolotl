@@ -30,9 +30,6 @@ pub(crate) struct NativeSlowPolicy {
     slow_windows: u8,
     committed: bool,
     expected_speed: Option<u64>,
-    probe_small_transfers: bool,
-    last_observed_bytes: u64,
-    last_data_at: Instant,
 }
 
 impl NativeSlowPolicy {
@@ -46,8 +43,6 @@ impl NativeSlowPolicy {
             self.window_started_at = Instant::now();
             self.window_start_bytes = downloaded;
             self.slow_windows = 0;
-            self.last_data_at = Instant::now();
-            self.last_observed_bytes = downloaded;
             SlowDecision::Continue
         } else {
             self.observe(downloaded, remaining)
@@ -65,19 +60,6 @@ impl NativeSlowPolicy {
             slow_windows: 0,
             committed: false,
             expected_speed,
-            probe_small_transfers: false,
-            last_observed_bytes: starting_bytes,
-            last_data_at: now,
-        }
-    }
-
-    pub(crate) fn for_http2(
-        starting_bytes: u64,
-        expected_speed: Option<u64>,
-    ) -> Self {
-        Self {
-            probe_small_transfers: true,
-            ..Self::new(starting_bytes, expected_speed)
         }
     }
 
@@ -86,20 +68,13 @@ impl NativeSlowPolicy {
         downloaded: u64,
         remaining: u64,
     ) -> SlowDecision {
-        if downloaded != self.last_observed_bytes {
-            self.last_observed_bytes = downloaded;
-            self.last_data_at = Instant::now();
-        }
-        let idle_elapsed = self.last_data_at.elapsed();
-        if idle_elapsed >= IDLE_TIMEOUT {
-            return SlowDecision::Idle {
-                elapsed: idle_elapsed,
-            };
-        }
         if self.committed {
             return SlowDecision::Continue;
         }
         let elapsed = self.window_started_at.elapsed();
+        if downloaded == self.window_start_bytes && elapsed >= IDLE_TIMEOUT {
+            return SlowDecision::Idle { elapsed };
+        }
         if elapsed < WINDOW {
             return SlowDecision::Continue;
         }
@@ -110,14 +85,10 @@ impl NativeSlowPolicy {
         self.window_started_at = Instant::now();
         self.window_start_bytes = downloaded;
 
-        if (!self.probe_small_transfers && remaining < MIN_REMAINING_BYTES)
+        if remaining < MIN_REMAINING_BYTES
             || estimated_duration(remaining, speed)
                 <= RECONNECT_OVERHEAD + MIN_SAVINGS
         {
-            if self.probe_small_transfers {
-                self.slow_windows = 0;
-                return SlowDecision::Continue;
-            }
             self.committed = true;
             return SlowDecision::Commit;
         }
@@ -126,13 +97,6 @@ impl NativeSlowPolicy {
             .map(|expected| expected.saturating_mul(40) / 100)
             .unwrap_or(COLD_SPEED_FLOOR)
             .max(ABSOLUTE_SPEED_FLOOR);
-        // A multiplexed stream shares bandwidth with other downloads, so a
-        // historical single-file peak alone must not trigger H2 retirement.
-        let expected_floor = if self.probe_small_transfers {
-            expected_floor.min(COLD_SPEED_FLOOR)
-        } else {
-            expected_floor
-        };
         if speed < expected_floor {
             self.slow_windows = self.slow_windows.saturating_add(1);
         } else {
@@ -184,72 +148,6 @@ fn estimated_duration(bytes: u64, speed: u64) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn healthy_http2_stream_is_not_downgraded_against_single_file_peak() {
-        for speed in [1024 * 1024, 5 * 1024 * 1024] {
-            let mut policy =
-                NativeSlowPolicy::for_http2(0, Some(30 * 1024 * 1024));
-            policy.started_at = Instant::now() - MIN_FLOW;
-            policy.slow_windows = REQUIRED_SLOW_WINDOWS - 1;
-            policy.window_started_at = Instant::now() - WINDOW;
-            assert_eq!(
-                policy.observe(speed * WINDOW.as_secs(), 128 * 1024 * 1024),
-                SlowDecision::Continue,
-            );
-            assert_eq!(policy.slow_windows, 0);
-        }
-    }
-
-    #[test]
-    fn abnormally_slow_http2_stream_still_recovers_with_fast_history() {
-        let mut policy = NativeSlowPolicy::for_http2(0, Some(30 * 1024 * 1024));
-        policy.started_at = Instant::now() - MIN_FLOW;
-        policy.slow_windows = REQUIRED_SLOW_WINDOWS - 1;
-        policy.window_started_at = Instant::now() - WINDOW;
-        assert!(matches!(
-            policy.observe(4 * 1024 * WINDOW.as_secs(), 512 * 1024),
-            SlowDecision::Probe { .. }
-        ));
-    }
-
-    #[test]
-    fn small_http2_transfer_probes_only_when_reconnect_can_pay_off() {
-        for (remaining, expected) in [(512 * 1024, true), (1024, false)] {
-            let mut policy = NativeSlowPolicy::for_http2(0, None);
-            policy.started_at = Instant::now() - MIN_FLOW;
-            policy.slow_windows = REQUIRED_SLOW_WINDOWS - 1;
-            policy.window_started_at = Instant::now() - WINDOW;
-            let decision = policy.observe(12 * 1024, remaining);
-            assert_eq!(
-                matches!(decision, SlowDecision::Probe { .. }),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn small_http2_transfer_keeps_monitoring_after_a_short_eta() {
-        let mut policy = NativeSlowPolicy::for_http2(0, None);
-        policy.started_at = Instant::now() - MIN_FLOW;
-        policy.window_started_at = Instant::now() - WINDOW;
-        assert_eq!(policy.observe(12 * 1024, 1024), SlowDecision::Continue);
-        assert!(!policy.committed);
-        policy.window_started_at = Instant::now() - WINDOW;
-        policy.slow_windows = REQUIRED_SLOW_WINDOWS - 1;
-        assert!(matches!(
-            policy.observe(12 * 1024 + 1, 1023),
-            SlowDecision::Probe { .. }
-        ));
-    }
-
-    #[test]
-    fn committed_transfer_still_recovers_from_idle() {
-        let mut policy = NativeSlowPolicy::for_http2(0, None);
-        policy.commit();
-        policy.last_data_at = Instant::now() - IDLE_TIMEOUT;
-        assert!(matches!(policy.observe(0, 1024), SlowDecision::Idle { .. }));
-    }
 
     #[test]
     fn local_pressure_does_not_trigger_route_switch_or_idle_failure() {

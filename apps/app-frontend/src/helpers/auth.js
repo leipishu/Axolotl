@@ -5,8 +5,6 @@
  */
 import { invoke } from '@tauri-apps/api/core'
 
-import { notifyAccountSelectionChanged } from './account-state.ts'
-
 // Example function:
 // User goes to auth_url to complete flow, and when completed, authenticate_await_completion() returns the credentials
 // export async function authenticate() {
@@ -93,12 +91,10 @@ export async function delete_yggdrasil_password(apiRoot, login) {
  * @returns {Promise<Credential>}
  */
 export async function add_offline_user(username, uuid) {
-    const result = await invoke('plugin:auth|add_offline_user', {
+    return await invoke('plugin:auth|add_offline_user', {
         username,
         ...(uuid ? { uuid } : {}),
     })
-    notifyAccountSelectionChanged()
-    return result
 }
 
 export async function get_anti_piracy_status() {
@@ -122,9 +118,7 @@ export async function get_default_user(offlineMode = false) {
  * @param {UUID} user
  */
 export async function set_default_user(user) {
-    const result = await invoke('plugin:auth|set_default_user', { user })
-    notifyAccountSelectionChanged()
-    return result
+    return await invoke('plugin:auth|set_default_user', { user })
 }
 
 /**
@@ -132,15 +126,13 @@ export async function set_default_user(user) {
  * @param {UUID} user
  */
 export async function remove_user(user) {
-    const result = await invoke('plugin:auth|remove_user', { user })
-    notifyAccountSelectionChanged()
-    return result
+    return await invoke('plugin:auth|remove_user', { user })
 }
 
 /**
  * Returns a list of users
  * @returns {Promise<Credential[]>}
  */
-export async function users(offlineMode = false, cachedOnly = false) {
-    return await invoke('plugin:auth|get_users', { offlineMode, cachedOnly })
+export async function users(offlineMode = false) {
+    return await invoke('plugin:auth|get_users', { offlineMode })
 }

@@ -62,47 +62,6 @@ impl ResourceStore {
         Self { pool }
     }
 
-    pub(crate) async fn installed_artifacts(
-        &self,
-        instance_id: &str,
-    ) -> ResourceResult<std::collections::HashMap<String, ResourceArtifact>>
-    {
-        let rows: Vec<(String, String)> = sqlx::query_as(
-            "SELECT exact.entry_id, exact.artifact FROM resource_installed_artifacts exact JOIN instance_content_entries entry ON entry.id = exact.entry_id WHERE entry.instance_id = ?"
-        ).bind(instance_id).fetch_all(&self.pool).await.map_err(database_error)?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(id, value)| {
-                serde_json::from_str(&value)
-                    .ok()
-                    .map(|artifact| (id, artifact))
-            })
-            .collect())
-    }
-
-    pub(crate) async fn project_types(
-        &self,
-        project: &SourceProjectRef,
-    ) -> ResourceResult<Vec<ResourceType>> {
-        let rows: Vec<String> = sqlx::query_scalar(
-            "SELECT content_type FROM resource_source_types WHERE source = ? AND project_id = ?"
-        ).bind(project.source.as_str()).bind(project.project_id.as_str())
-            .fetch_all(&self.pool).await.map_err(database_error)?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|value| match value.as_str() {
-                "mod" => Some(ResourceType::Mod),
-                "plugin" => Some(ResourceType::Plugin),
-                "datapack" => Some(ResourceType::DataPack),
-                "resourcepack" => Some(ResourceType::ResourcePack),
-                "shader" => Some(ResourceType::Shader),
-                "modpack" => Some(ResourceType::ModPack),
-                "world" => Some(ResourceType::World),
-                _ => None,
-            })
-            .collect())
-    }
-
     pub async fn lookup(
         &self,
         project: &SourceProjectRef,
@@ -309,85 +268,6 @@ impl ResourceStore {
             left_artifact,
             right_artifact,
         })?;
-        use sha2::{Digest, Sha256};
-        let mut references = [
-            serde_json::to_string(&left_artifact.reference)?,
-            serde_json::to_string(&right_artifact.reference)?,
-        ];
-        references.sort();
-        let evidence_id = format!(
-            "artifact-pair:{:x}",
-            Sha256::digest(serde_json::to_vec(&references)?)
-        );
-        self.confirm_identity(left, right, &evidence_id, &payload)
-            .await
-    }
-
-    /// Trust the bundled MCMOD source pair only within one exact subvariant.
-    /// This establishes project identity, never equivalence of release bytes.
-    pub(crate) async fn confirm_curated_projects(
-        &self,
-        left: &SourceProjectMetadata,
-        right: &SourceProjectMetadata,
-    ) -> ResourceResult<ResourceId> {
-        let (mr, cf) =
-            match (left.project.source.as_str(), right.project.source.as_str())
-            {
-                ("modrinth", "curseforge") => (left, right),
-                ("curseforge", "modrinth") => (right, left),
-                _ => return Err(ResourceError::InvalidRequest(
-                    "curated identity requires a Modrinth and CurseForge pair"
-                        .into(),
-                )),
-            };
-        let (Some(mr_slug), Some(cf_slug)) = (&mr.slug, &cf.slug) else {
-            return Err(ResourceError::InvalidRequest(
-                "curated identity requires exact project slugs".into(),
-            ));
-        };
-        let lookup = crate::content_search::lookup_content_identities(
-            &[mr_slug.clone()],
-            &[cf_slug.clone()],
-        );
-        let record = lookup
-            .modrinth
-            .get(mr_slug)
-            .filter(|records| records.len() == 1)
-            .and_then(|records| records.first())
-            .filter(|record| {
-                lookup.curseforge.get(cf_slug).is_some_and(|records| {
-                    records.len() == 1 && records[0].key == record.key
-                })
-            })
-            .ok_or_else(|| {
-                ResourceError::InvalidRequest(
-                    "projects do not share one MCMOD subvariant".into(),
-                )
-            })?;
-        if !left.types.iter().any(|kind| right.types.contains(kind)) {
-            return Err(ResourceError::InvalidRequest(
-                "curated project types do not match".into(),
-            ));
-        }
-        let payload = serde_json::to_string(&serde_json::json!({
-            "version": 1, "kind": "mcmod-source-pair", "mapping": record.key,
-            "left": left.project, "right": right.project,
-            "leftSlug": left.slug, "rightSlug": right.slug,
-        }))?;
-        let evidence_id = format!("mcmod-source-pair:{}", record.key);
-        self.confirm_identity(left, right, &evidence_id, &payload)
-            .await
-    }
-
-    async fn confirm_identity(
-        &self,
-        left: &SourceProjectMetadata,
-        right: &SourceProjectMetadata,
-        evidence_id: &str,
-        payload: &str,
-    ) -> ResourceResult<ResourceId> {
-        validate_project(&left.project)?;
-        validate_project(&right.project)?;
         let mut transaction =
             self.pool.begin().await.map_err(database_error)?;
         ensure_project(&mut transaction, &left.project, &left.types).await?;
@@ -405,6 +285,16 @@ impl ResourceStore {
             sqlx::query("UPDATE resource_identity_evidence SET resource_id = ? WHERE resource_id = ?")
                 .bind(winner).bind(loser).execute(&mut *transaction).await.map_err(database_error)?;
         }
+        use sha2::{Digest, Sha256};
+        let mut references = [
+            serde_json::to_string(&left_artifact.reference)?,
+            serde_json::to_string(&right_artifact.reference)?,
+        ];
+        references.sort();
+        let evidence_id = format!(
+            "artifact-pair:{:x}",
+            Sha256::digest(serde_json::to_vec(&references)?)
+        );
         sqlx::query("INSERT INTO resource_identity_evidence(evidence_id, resource_id, payload, confirmed_at) VALUES (?, ?, ?, ?) ON CONFLICT(evidence_id) DO UPDATE SET resource_id = excluded.resource_id, payload = excluded.payload, confirmed_at = excluded.confirmed_at WHERE resource_identity_evidence.resource_id <> excluded.resource_id OR resource_identity_evidence.payload <> excluded.payload")
             .bind(evidence_id).bind(winner).bind(payload).bind(chrono::Utc::now().timestamp())
             .execute(&mut *transaction).await.map_err(database_error)?;

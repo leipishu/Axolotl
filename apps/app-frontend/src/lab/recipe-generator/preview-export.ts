@@ -132,20 +132,6 @@ async function drawPreview(
         return
     }
 
-    if (recipe.recipeType === 'brewing') {
-        for (const [index, slot] of (
-            ['brewing.input', 'brewing.reagent', 'brewing.result'] as const
-        ).entries())
-            await drawSlot(
-                canvas,
-                15 + index * 105,
-                45,
-                getSlotDisplay(recipe.slots[slot], ctx),
-                atlas,
-                image,
-            )
-        return
-    }
     if (recipe.recipeType === 'stonecutter') {
         await drawSlot(
             canvas,

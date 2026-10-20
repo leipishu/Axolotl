@@ -191,9 +191,8 @@ impl FriendsSocket {
                                             ServerToClientMessage::FriendSocketStoppedListening { .. } => {}, // TODO
 
                                             ServerToClientMessage::SocketConnected { to_socket, new_socket } => {
-                                                let connected_to = sockets.get(&to_socket).map(|entry| Arc::clone(entry.value()));
-                                                if let Some(connected_to) = connected_to
-                                                    && let InternalTunnelSocket::Listening(local_addr) = *connected_to
+                                                if let Some(connected_to) = sockets.get(&to_socket)
+                                                    && let InternalTunnelSocket::Listening(local_addr) = *connected_to.value().clone()
                                                         && let Ok(new_stream) = TcpStream::connect(local_addr).await {
                                                             let (read, write) = new_stream.into_split();
                                                             sockets.insert(new_socket, Arc::new(InternalTunnelSocket::Connected(Mutex::new(write))));
@@ -206,9 +205,8 @@ impl FriendsSocket {
                                                 sockets.remove_if(&socket, |_, x| matches!(*x.clone(), InternalTunnelSocket::Connected(_)));
                                             },
                                             ServerToClientMessage::SocketData { socket, data } => {
-                                                let socket = sockets.get(&socket).map(|entry| Arc::clone(entry.value()));
-                                                if let Some(socket) = socket
-                                                    && let InternalTunnelSocket::Connected(ref stream) = *socket {
+                                                if let Some(mut socket) = sockets.get_mut(&socket)
+                                                    && let InternalTunnelSocket::Connected(ref stream) = *socket.value_mut().clone() {
                                                         let _ = stream.lock().await.write_all(&data).await;
                                                     }
                                             },
@@ -406,16 +404,18 @@ impl FriendsSocket {
     #[tracing::instrument(skip(self))]
     pub async fn open_port(&self, port: u16) -> crate::Result<TunnelSocket> {
         let socket_id = Uuid::new_v4();
-        let socket = Arc::new(InternalTunnelSocket::Listening(
-            SocketAddr::new("127.0.0.1".parse().unwrap(), port),
+        let socket = self.tunnel_sockets.entry(socket_id).insert(Arc::new(
+            InternalTunnelSocket::Listening(SocketAddr::new(
+                "127.0.0.1".parse().unwrap(),
+                port,
+            )),
         ));
-        self.tunnel_sockets.insert(socket_id, Arc::clone(&socket));
         Self::send_message(
             &self.write,
             ClientToServerMessage::SocketListen { socket: socket_id },
         )
         .await?;
-        self.create_tunnel_socket(socket_id, &socket)
+        self.create_tunnel_socket(socket_id, socket)
     }
 
     pub async fn is_connected(&self) -> bool {

@@ -5,21 +5,6 @@
         </Teleport>
         <ProjectPageSkeleton />
     </template>
-    <EmptyState
-        v-else-if="loadFailed"
-        type="error"
-        class="p-6"
-        :heading="formatMessage(messages.loadFailed)"
-    >
-        <template #actions>
-            <Button type="colored" color="brand" @click="loadProjectPage">
-                {{ formatMessage(commonMessages.retryButton) }}
-            </Button>
-            <Button type="outlined" @click="router.push(projectBrowseBackUrl)">
-                {{ formatMessage(commonMessages.backButton) }}
-            </Button>
-        </template>
-    </EmptyState>
     <div v-else-if="data">
         <UpgradeProjectReturnBar />
         <Teleport to="#sidebar-teleport-target">
@@ -469,7 +454,6 @@ import {
     commonProjectSettingsMessages,
     CreationFlowModal,
     defineMessages,
-    EmptyState,
     formatDependencyProjectFilterOption,
     formatProjectTypeSentence,
     getLatestMatchingInstallVersion,
@@ -687,7 +671,6 @@ const messages = defineMessages({
 const { installingServerProjects, playServerProject, showAddServerToInstanceModal } =
     injectServerInstall()
 const loading = ref(true)
-const loadFailed = ref(false)
 const installing = ref(false)
 const browseInstanceSelector = ref()
 const data = shallowRef(null)
@@ -1103,14 +1086,15 @@ async function fetchProjectData() {
     translationLoading.value = false
     translations.value = {}
     const [project, projectV3Result] = await Promise.all([
-        get_project(requestedProjectId, 'must_revalidate'),
+        get_project(requestedProjectId, 'must_revalidate').catch(handleError),
         get_project_v3(requestedProjectId, 'must_revalidate').catch(handleError),
     ])
     if (!isCurrent()) return
     projectV3.value = projectV3Result
 
     if (!project) {
-        throw new Error('Project not found')
+        handleError(formatMessage(messages.loadFailed))
+        return
     }
 
     data.value = project
@@ -1131,7 +1115,7 @@ async function fetchProjectData() {
     ])
     if (!isCurrent()) return
     ;[versions.value, members.value, categories.value, instance.value, instanceProjects.value] =
-        relatedData.map((value, index) => (index < 3 ? (value ?? []) : value))
+        relatedData
 
     versions.value = versions.value.sort(
         (a, b) => dayjs(b.date_published) - dayjs(a.date_published),
@@ -1341,7 +1325,6 @@ let projectLoadVersion = 0
 async function loadProjectPage() {
     const loadVersion = ++projectLoadVersion
     loading.value = true
-    loadFailed.value = false
     data.value = null
     projectV3.value = null
     versions.value = []
@@ -1358,10 +1341,6 @@ async function loadProjectPage() {
         await fetchProjectData()
         if (loadVersion !== projectLoadVersion) return
         await syncContentSelectionTarget()
-    } catch (error) {
-        if (loadVersion !== projectLoadVersion) return
-        if (data.value) handleError(error)
-        else loadFailed.value = true
     } finally {
         if (loadVersion === projectLoadVersion) loading.value = false
     }

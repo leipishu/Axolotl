@@ -9,9 +9,7 @@ export type WorldDatapack = {
     display_name: string
     kind: DatapackKind
     pack_format?: number
-    supported_formats?: number | number[] | { min_inclusive: number; max_inclusive: number }
-    min_format?: [number, number]
-    max_format?: [number, number]
+    supported_formats?: number[]
     description?: unknown
     icon?: string
     enabled?: boolean

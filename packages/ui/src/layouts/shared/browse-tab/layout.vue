@@ -164,14 +164,14 @@ const skeletonCount = computed(() => {
 <template>
     <div
         ref="stickyChromeRef"
-        class="browse-toolbar-chrome sticky top-0 z-20 flex flex-col gap-3 border-b border-solid border-surface-5"
+        class="browse-toolbar-chrome sticky top-0 z-20 flex flex-col gap-3 border-b border-solid border-surface-5 bg-surface-1"
         :class="[
             isChromeStuck && ctx.variant !== 'web'
                 ? 'border-t shadow-[0_8px_16px_-12px_rgba(0,0,0,0.35)]'
                 : '',
             ctx.variant === 'web'
-                ? 'mb-3 rounded-xl bg-surface-1 p-3'
-                : '-mx-6 -mt-6 border-0 bg-[color-mix(in_srgb,var(--surface-1-opaque,var(--surface-1))_20%,transparent)] backdrop-blur-xl',
+                ? 'mb-3 rounded-xl p-3'
+                : '-mx-6 -mt-6 rounded-tl-[--radius-xl] rounded-tr-[--radius-xl] border-0',
         ]"
     >
         <div v-if="showInstallHeader" class="p-3 pb-0">

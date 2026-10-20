@@ -61,13 +61,3 @@ it('uses a localized recovery message for unknown failures and leaves the error 
     )
     expect(error.message).toBe('opaque backend diagnostic')
 })
-
-it('explains incomplete version catalogs without calling them incompatible', () => {
-    const error = new Error(
-        'Source release window is incomplete; choose a specific game version or file',
-    )
-    expect(isResourceOperationError(error)).toBe(true)
-    expect(resourceOperationError(error, formatter('zh-CN'))).toBe(
-        '内容来源未能返回全部版本，请打开项目的“版本”标签页选择文件。',
-    )
-})

@@ -101,46 +101,6 @@ const node = (id: string, state: string, artifact: unknown = null) => ({
 })
 const root = node('root', 'update', { reference, fileName: 'Root.jar' })
 const optional = node('optional', 'optionalCandidate')
-
-it('omits compatibility exceptions for local filename matches but keeps real unknown release warnings', async () => {
-    ready()
-    const local = node('local-file', 'satisfied')
-    local.compatibility = { gameVersion: 'unknown', loader: 'unknown', reasons: [] }
-    const remote = node('remote-file', 'install', { reference, fileName: 'Remote.jar' })
-    remote.compatibility = { gameVersion: 'unknown', loader: 'unknown', reasons: [] }
-    vi.mocked(resourcePrepareEntryOperation).mockResolvedValue({
-        ...plan(),
-        nodes: [local, remote],
-    } as unknown as ResourceOperationPlan)
-    const wrapper = mount(ResourceOperationPreviewModal)
-    const result = wrapper.vm.show(input)
-    try {
-        await flushPromises()
-        const assessments = wrapper
-            .findAll('p')
-            .filter((paragraph) => paragraph.text() === 'Game version: Unknown; loader: Unknown')
-        expect(assessments).toHaveLength(1)
-        expect(
-            wrapper
-                .findAll('button')
-                .filter((button) => button.text() === 'Accept Minecraft compatibility exception'),
-        ).toHaveLength(1)
-        expect(
-            wrapper
-                .findAll('button')
-                .filter((button) => button.text() === 'Accept loader compatibility exception'),
-        ).toHaveLength(1)
-        expect(wrapper.text()).toContain('Already satisfied')
-        await wrapper
-            .findAll('button')
-            .find((button) => button.text() === 'Cancel')!
-            .trigger('click')
-        expect(await result).toBeNull()
-    } finally {
-        wrapper.unmount()
-    }
-})
-
 function plan(revision = 1): ResourceOperationPlan {
     return {
         id: 'plan',

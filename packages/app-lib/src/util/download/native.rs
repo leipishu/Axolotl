@@ -2,6 +2,7 @@
 
 use crate::util::fetch::{DownloadRoute, ProxyPolicy};
 
+const SMALL_FILE_LIMIT: u64 = 4 * 1024 * 1024;
 const MEDIUM_FILE_LIMIT: u64 = 16 * 1024 * 1024;
 const LARGE_FILE_LIMIT: u64 = 64 * 1024 * 1024;
 
@@ -104,7 +105,7 @@ pub(crate) async fn h2_policy(
     let Some(size) = size else {
         return Some(NativeH2Policy {
             allow_cold_connection: true,
-            abort_if_slow: true,
+            abort_if_slow: false,
             expected_speed: None,
         });
     };
@@ -122,6 +123,13 @@ pub(crate) async fn h2_policy(
     let expected_speed = h2
         .and_then(|health| health.throughput_bps)
         .map(|speed| speed.min(u64::MAX as f64) as u64);
+    if size < SMALL_FILE_LIMIT {
+        return Some(NativeH2Policy {
+            allow_cold_connection: true,
+            abort_if_slow: false,
+            expected_speed,
+        });
+    }
     if size < MEDIUM_FILE_LIMIT {
         // The connection slot serializes the first handshake, so a batch of
         // medium files shares one cold-start attempt instead of stampeding the
@@ -246,7 +254,7 @@ mod tests {
             h2_policy(&route(ProxyPolicy::Direct), Some(1024 * 1024),).await,
             Some(NativeH2Policy {
                 allow_cold_connection: true,
-                abort_if_slow: true,
+                abort_if_slow: false,
                 expected_speed: None,
             })
         );

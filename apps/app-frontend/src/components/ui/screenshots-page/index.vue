@@ -19,7 +19,6 @@ import {
     XIcon,
 } from '@modrinth/assets'
 import {
-    Admonition,
     Avatar,
     Button,
     type ButtonMenuOption,
@@ -392,25 +391,6 @@ const screenshotsError = computed(() => {
     }
     return new Error(String(error))
 })
-const hasScreenshotViewData = computed(
-    () =>
-        screenshotsQuery.data.value !== undefined &&
-        (groupBy.value !== 'custom' || screenshotGroupsQuery.data.value !== undefined),
-)
-const retryingScreenshots = computed(
-    () =>
-        screenshotsQuery.isFetching.value ||
-        (groupBy.value === 'custom' && screenshotGroupsQuery.isFetching.value),
-)
-async function retryScreenshots() {
-    const requests = []
-    if (screenshotsQuery.error.value) requests.push(screenshotsQuery.refetch())
-    if (groupBy.value === 'custom' && screenshotGroupsQuery.error.value) {
-        requests.push(screenshotGroupsQuery.refetch())
-    }
-    await Promise.all(requests)
-}
-
 const selectionActive = computed(() => selectedKeys.value.size > 0)
 const selectedScreenshots = computed(() =>
     screenshots.value.filter((screenshot) => selectedKeys.value.has(getSelectionKey(screenshot))),
@@ -1629,31 +1609,20 @@ onBeforeUnmount(() => {
                 :group-options="groupOptions"
                 @new-group="createCustomGroup"
             />
+            <p class="m-0 text-xs text-[var(--color-text-tertiary)]">
+                {{ formatMessage(messages.selectionHint) }}
+            </p>
         </template>
 
-        <Admonition
-            v-if="screenshotsError && hasScreenshotViewData"
-            type="warning"
-            :header="formatMessage(messages.errorHeading)"
-        >
-            <p class="m-0">{{ screenshotsError.message }}</p>
-            <Button type="outlined" :loading="retryingScreenshots" @click="retryScreenshots">
-                {{ formatMessage(commonMessages.retryButton) }}
-            </Button>
-        </Admonition>
         <ReadyTransition :pending="screenshotsReadyPending">
             <EmptyState
-                v-if="screenshotsError && !hasScreenshotViewData"
+                v-if="screenshotsError"
                 type="error"
                 :heading="formatMessage(messages.errorHeading)"
                 :description="screenshotsError.message"
             >
                 <template #actions>
-                    <Button
-                        type="outlined"
-                        :loading="retryingScreenshots"
-                        @click="retryScreenshots"
-                    >
+                    <Button type="outlined" @click="screenshotsQuery.refetch()">
                         {{ formatMessage(commonMessages.retryButton) }}
                     </Button>
                 </template>

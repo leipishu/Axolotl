@@ -6,10 +6,6 @@ plugins {
     id("com.gradleup.shadow") version "9.2.2"
 }
 
-providers.gradleProperty("axolotlBuildDir").orNull?.let {
-    layout.buildDirectory.set(file(it))
-}
-
 repositories {
     mavenCentral()
 }

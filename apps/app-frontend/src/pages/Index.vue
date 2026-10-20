@@ -15,7 +15,6 @@ import {
     injectPageContext,
     useVIntl,
 } from '@modrinth/ui'
-import { useQueryClient } from '@tanstack/vue-query'
 import { computed, inject, onUnmounted, provide, type Ref, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -43,14 +42,10 @@ import HomeMinimal from '@/components/home/HomeMinimal.vue'
 import HomePlayInsights from '@/components/home/HomePlayInsights.vue'
 import { useNetworkStatus } from '@/composables/useNetworkStatus'
 import { get_default_user, users } from '@/helpers/auth'
-import { DIRECT_LINKS_CHANGED_EVENT } from '@/helpers/direct-link-sync'
+import { DIRECT_LINKS_SYNCED_EVENT } from '@/helpers/direct-link-sync'
 import { instance_groups_listener, instance_listener } from '@/helpers/events'
 import { list } from '@/helpers/instance'
-import {
-    appSettingsKeys,
-    appSettingsQueryOptions,
-    update as updateSettings,
-} from '@/helpers/settings'
+import { get as getSettings, update as updateSettings } from '@/helpers/settings'
 import type { GameInstance } from '@/helpers/types'
 import { useBreadcrumbs } from '@/store/breadcrumbs'
 import { useTheming } from '@/store/state'
@@ -63,7 +58,6 @@ const breadcrumbs = useBreadcrumbs()
 const { formatMessage } = useVIntl()
 const { offline } = useNetworkStatus()
 const themeStore = useTheming()
-const queryClient = useQueryClient()
 const pageContext = injectPageContext()
 
 const messages = defineMessages({
@@ -126,8 +120,7 @@ const isFreeWidgetLayout = computed(() => dashboardConfig.value?.layout === 'fre
 const switchingLayout = ref(false)
 const dashboardSaveQueue = createHomeDashboardSaveQueue(
     async (config) => {
-        const settings = await updateSettings({ home_widgets: config })
-        queryClient.setQueryData(appSettingsKeys.all, settings)
+        await updateSettings({ home_widgets: config })
     },
     (config) => {
         dashboardConfig.value = config
@@ -140,7 +133,7 @@ const floatingControlsStyle = computed(() => ({
 }))
 
 const animateSidebarShow = ref(false)
-const sidebarTimer = setTimeout(() => {
+setTimeout(() => {
     animateSidebarShow.value = true
 }, 200)
 
@@ -150,21 +143,18 @@ async function clearMissingMinimalInstance() {
 
     themeStore.minimalHomeInstanceId = null
     try {
-        const settings = await updateSettings({ minimal_home_instance_id: null })
-        queryClient.setQueryData(appSettingsKeys.all, settings)
+        const settings = await getSettings()
+        if (settings.minimal_home_instance_id === null) return
+        await updateSettings({ minimal_home_instance_id: null })
     } catch (error) {
         handleError(error)
     }
 }
 
-let instanceRequest = 0
 async function fetchInstances() {
-    const request = ++instanceRequest
     try {
-        const result = await list()
-        if (disposed || request !== instanceRequest) return false
-        instances.value = result
-        void clearMissingMinimalInstance()
+        instances.value = await list()
+        await clearMissingMinimalInstance()
         return true
     } catch (error) {
         handleError(error)
@@ -173,11 +163,8 @@ async function fetchInstances() {
 }
 
 async function fetchPlayerName() {
-    const [selectedUser, accounts] = await Promise.all([
-        get_default_user(offline.value).catch(() => undefined),
-        users(offline.value).catch(() => []),
-    ])
-    if (disposed) return
+    const selectedUser = await get_default_user(offline.value).catch(() => undefined)
+    const accounts = await users(offline.value).catch(() => [])
     const account = getActivePlayerAccount(selectedUser, accounts)
 
     playerName.value = account?.name ?? null
@@ -203,10 +190,7 @@ function pruneGreetingOverrides(accounts: readonly { account_id?: string }[]) {
 
 async function loadDashboardConfig() {
     try {
-        const settings = await queryClient.fetchQuery({
-            ...appSettingsQueryOptions(),
-            staleTime: 30_000,
-        })
+        const settings = await getSettings()
         const normalized = normalizeHomeDashboard(settings.home_widgets)
         if (normalized) {
             dashboardConfig.value = normalized
@@ -217,7 +201,7 @@ async function loadDashboardConfig() {
             themeStore.getFeatureFlag(recentProjectsInHomeFlag),
         )
         dashboardConfig.value = config
-        void dashboardSaveQueue.enqueue(config, config)
+        await updateSettings({ home_widgets: config })
     } catch (error) {
         dashboardConfig.value = createDefaultHomeDashboard(
             themeStore.getFeatureFlag(recentProjectsInHomeFlag),
@@ -331,36 +315,24 @@ function openWidgetPicker() {
     dashboard.value?.openWidgetPicker()
 }
 
-let disposed = false
-const unlisteners: Array<() => void> = []
-function keepListener(request: Promise<() => void>) {
-    void request
-        .then((unlisten) => {
-            if (disposed) unlisten()
-            else unlisteners.push(unlisten)
-        })
-        .catch(handleError)
-}
-window.addEventListener(DIRECT_LINKS_CHANGED_EVENT, fetchInstances)
-keepListener(
-    instance_listener(() => {
-        if (!disposed) void fetchInstances()
-    }),
-)
-keepListener(
-    instance_groups_listener(() => {
-        if (!disposed) void fetchInstances()
-    }),
-)
-onUnmounted(() => {
-    disposed = true
-    clearTimeout(sidebarTimer)
-    unlisteners.forEach((unlisten) => unlisten())
-    window.removeEventListener(DIRECT_LINKS_CHANGED_EVENT, fetchInstances)
+const instancesLoaded = await fetchInstances()
+if (!instancesLoaded || instances.value.length > 0) void fetchPlayerName()
+await loadDashboardConfig()
+
+window.addEventListener(DIRECT_LINKS_SYNCED_EVENT, fetchInstances)
+
+const unlistenInstance = await instance_listener(async () => {
+    await fetchInstances()
+})
+const unlistenInstanceGroups = await instance_groups_listener(async () => {
+    await fetchInstances()
 })
 
-const [instancesLoaded] = await Promise.all([fetchInstances(), loadDashboardConfig()])
-if (!instancesLoaded || instances.value.length > 0) void fetchPlayerName()
+onUnmounted(() => {
+    unlistenInstance()
+    unlistenInstanceGroups()
+    window.removeEventListener(DIRECT_LINKS_SYNCED_EVENT, fetchInstances)
+})
 </script>
 
 <template>

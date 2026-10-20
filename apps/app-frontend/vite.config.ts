@@ -3,7 +3,6 @@ import { existsSync, readFileSync, statSync } from 'fs'
 import { extname, resolve, sep } from 'path'
 import { fileURLToPath } from 'url'
 import { defineConfig } from 'vite'
-import { nodePolyfills } from 'vite-plugin-node-polyfills'
 import vueDevTools from 'vite-plugin-vue-devtools'
 import svgLoader from 'vite-svg-loader'
 
@@ -93,20 +92,6 @@ export default defineConfig(({ command }) => ({
         ],
     },
     plugins: [
-        nodePolyfills({
-            include: [
-                'crypto',
-                'path',
-                'util',
-                'stream',
-                'buffer',
-                'events',
-                'string_decoder',
-                'assert',
-                'vm',
-            ],
-            globals: { Buffer: true, process: true, global: true },
-        }),
         blockbenchSkinDevAssets(),
         // Vue DevTools injects transform/runtime work; keep it for `vite`/`tauri
         // dev` only so production `vite build` stays lean.
@@ -131,15 +116,6 @@ export default defineConfig(({ command }) => ({
         }),
     ],
     optimizeDeps: {
-        include: [
-            'deepagents/browser',
-            'langchain',
-            '@langchain/core/language_models/chat_models',
-            '@langchain/core/messages',
-            '@langchain/core/tools',
-            '@langchain/core/utils/function_calling',
-            'zod',
-        ],
         exclude: ['ace-builds', 'vue3-ace-editor'],
     },
 
@@ -181,10 +157,10 @@ export default defineConfig(({ command }) => ({
             },
         },
         // Tauri supports es2021
-        target: process.env.TAURI_ENV_PLATFORM == 'windows' ? 'chrome105' : 'safari13',
+        target: process.env.TAURI_ENV_PLATFORM == 'windows' ? 'chrome105' : 'safari13', // eslint-disable-line turbo/no-undeclared-env-vars
         // don't minify for debug builds
-        minify: !process.env.TAURI_ENV_DEBUG,
+        minify: !process.env.TAURI_ENV_DEBUG, // eslint-disable-line turbo/no-undeclared-env-vars
         // produce sourcemaps for debug builds
-        sourcemap: !!process.env.TAURI_ENV_DEBUG,
+        sourcemap: !!process.env.TAURI_ENV_DEBUG, // eslint-disable-line turbo/no-undeclared-env-vars
     },
 }))

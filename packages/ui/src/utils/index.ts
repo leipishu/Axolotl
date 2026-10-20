@@ -17,9 +17,4 @@ export * from './tag-messages'
 export * from './truncate'
 export * from './version-compatibility'
 export * from './vue-children'
-export type { SkinRendererConfig } from './webgl/skin-rendering'
-
-/** Loads the WebGL implementation only when a skin renderer is needed. */
-export function loadSkinRendering() {
-    return import('./webgl/skin-rendering')
-}
+export * from './webgl/skin-rendering'

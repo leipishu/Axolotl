@@ -45,11 +45,6 @@ pub async fn check(
             .map(|(id, _)| id.clone())
             .collect(),
     };
-    let local =
-        plans::requirements::local_metadata(&state.pool, &instance_id).await?;
-    let requirements = service
-        .retained_requirements(&[], &hydrated.entries, &local, cancel)
-        .await?;
     for entry in hydrated.entries.into_iter().filter(|entry| !entry.missing) {
         if cancel.is_cancelled() {
             return Err(ResourceError::Canceled);
@@ -88,17 +83,13 @@ pub async fn check(
                     continue;
                 }
             };
-        let retained =
-            service.requirements_for(&selection, &requirements).await?;
         match service
-            .selected_release_with_requirements(
+            .selected_release_for_current(
                 &selection,
                 &target,
                 &preferred,
                 cancel,
                 Some(&current),
-                &[],
-                &retained,
             )
             .await
         {

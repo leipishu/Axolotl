@@ -7,9 +7,11 @@ import type { InstallJobSnapshot } from './install.ts'
 import {
     confirmedContentGroupKey,
     duplicateGroupUpdateEntries,
+    queueResourceEntryChanges,
     type ResourceEntryReview,
     reviewResourceEntryChanges,
 } from './resource-update-selection.ts'
+import type { ResourceOperationPlan } from './resources.ts'
 
 function item(entry: string, overrides: Partial<ContentItem> = {}): ContentItem {
     return {
@@ -23,6 +25,68 @@ function item(entry: string, overrides: Partial<ContentItem> = {}): ContentItem 
         ...overrides,
     } as ContentItem
 }
+
+test('installed mod changes queue only the selected entries with dependency resolution disabled', async () => {
+    for (const release of [
+        null,
+        { project: { source: 'modrinth', projectId: 'project' }, releaseId: 'fixed' },
+    ]) {
+        const tracked: string[] = []
+        const result = await queueResourceEntryChanges(
+            { instanceId: 'instance', entryIds: ['a', 'b', 'a'], release },
+            async (...args) => {
+                assert.deepEqual(args, [
+                    'instance',
+                    release ? 'switchVersion' : 'update',
+                    ['a', 'b'],
+                    release,
+                    false,
+                    undefined,
+                    undefined,
+                    false,
+                ])
+                return {
+                    id: 'plan',
+                    revision: 3,
+                    actions: [{}],
+                    issues: [],
+                } as unknown as ResourceOperationPlan
+            },
+            async (id, revision) => {
+                assert.equal(id, 'plan')
+                assert.equal(revision, 3)
+                return { job_id: 'direct' } as InstallJobSnapshot
+            },
+            (job) => tracked.push(job.job_id),
+        )
+        assert.equal(result, true)
+        assert.deepEqual(tracked, ['direct'])
+    }
+})
+
+test('direct changes do not queue empty or blocked plans', async () => {
+    for (const blocked of [false, true]) {
+        let queued = false
+        const action = queueResourceEntryChanges(
+            { instanceId: 'instance', entryIds: ['a'], release: null },
+            async () =>
+                ({
+                    id: 'plan',
+                    revision: 1,
+                    actions: [],
+                    issues: blocked ? [{ blocking: true, message: 'incompatible' }] : [],
+                }) as unknown as ResourceOperationPlan,
+            async () => {
+                queued = true
+                return {} as InstallJobSnapshot
+            },
+            () => assert.fail('must not track'),
+        )
+        if (blocked) await assert.rejects(action, /incompatible/)
+        else assert.equal(await action, false)
+        assert.equal(queued, false)
+    }
+})
 
 test('duplicate group update includes every actual updatable entry across sources and versions', () => {
     const anchor = item('a')

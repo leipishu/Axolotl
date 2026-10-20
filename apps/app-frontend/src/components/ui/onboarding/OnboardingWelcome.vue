@@ -8,7 +8,6 @@ import { get, update } from '@/helpers/settings.ts'
 import i18n, {
     getSystemResolvedLocale,
     isFollowingSystemLocale,
-    setAppLocale,
     setFollowSystemLocale,
 } from '@/i18n.config'
 
@@ -92,19 +91,15 @@ const localeOptions = computed(() =>
 async function persistLocale(follow: boolean, concreteLocale: string) {
     if (applyingLocale.value) return
     applyingLocale.value = true
-    const previousLocale = i18n.global.locale.value
-    const previousFollow = followSystem.value
     try {
         setFollowSystemLocale(follow)
         followSystem.value = follow
-        await setAppLocale(concreteLocale)
+        i18n.global.locale.value = concreteLocale
         await update({ locale: concreteLocale })
         settingsLocale.value = concreteLocale
     } catch (error) {
         console.warn('Failed to apply onboarding language', error)
-        setFollowSystemLocale(previousFollow)
-        followSystem.value = previousFollow
-        await setAppLocale(previousLocale)
+        followSystem.value = isFollowingSystemLocale(settingsLocale.value)
     } finally {
         applyingLocale.value = false
     }

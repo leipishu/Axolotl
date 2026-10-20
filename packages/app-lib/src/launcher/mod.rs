@@ -28,8 +28,8 @@ use crate::state::{
     InstanceLaunchContext, InstanceLink, JavaVersion, MemorySettings,
     ProcessMetadata, WindowSize,
 };
+use crate::util::io;
 use crate::util::rpc::RpcServerBuilder;
-use crate::util::{io, java_environment};
 use crate::{State, get_resource_file, process};
 use base64::Engine;
 use base64::prelude::BASE64_STANDARD;
@@ -73,7 +73,6 @@ pub mod download;
 pub mod jvm_args;
 pub mod language;
 pub mod local_version;
-pub(crate) mod multimc;
 pub mod optifine;
 pub mod quick_play_version;
 
@@ -117,57 +116,32 @@ fn set_high_performance_gpu_preference(
     Ok(())
 }
 
-#[cfg(any(target_os = "linux", test))]
-mod gpu_environment;
-
 #[cfg(target_os = "linux")]
 async fn high_performance_gpu_environment() -> Vec<(String, String)> {
-    match tokio::time::timeout(
-        std::time::Duration::from_secs(2),
-        switcheroo_gpu_environment(),
-    )
-    .await
-    {
-        Ok(Ok(environment)) => environment,
-        result => {
-            tracing::debug!(
-                ?result,
-                "GPU topology unavailable; preserving the system GPU selection"
+    match switcheroo_gpu_environment().await {
+        Ok(Some(environment)) => {
+            tracing::info!(
+                "Using switcheroo-control environment for high-performance GPU"
             );
-            Vec::new()
+            environment
+        }
+        Ok(None) => fallback_high_performance_gpu_environment(),
+        Err(error) => {
+            tracing::debug!(
+                %error,
+                "Failed to query switcheroo-control; using PRIME fallback"
+            );
+            fallback_high_performance_gpu_environment()
         }
     }
 }
 
 #[cfg(target_os = "linux")]
-async fn switcheroo_gpu_environment() -> crate::Result<Vec<(String, String)>> {
+async fn switcheroo_gpu_environment()
+-> crate::Result<Option<Vec<(String, String)>>> {
     use std::collections::HashMap;
     use zbus::zvariant::OwnedValue;
     use zbus::{Connection, Proxy};
-    let x11_session = std::env::var("XDG_SESSION_TYPE")
-        .is_ok_and(|value| value == "x11")
-        || (std::env::var_os("DISPLAY").is_some()
-            && std::env::var_os("WAYLAND_DISPLAY").is_none());
-    if x11_session {
-        let mut command = Command::new("glxinfo");
-        java_environment::configure_child_environment(command.as_std_mut());
-        let output = command.arg("-B").kill_on_drop(true).output().await;
-        let renderer_is_nvidia = output
-            .ok()
-            .filter(|output| output.status.success())
-            .and_then(|output| {
-                gpu_environment::glx_renderer_is_nvidia(
-                    &String::from_utf8_lossy(&output.stdout),
-                )
-            });
-        if renderer_is_nvidia != Some(false) {
-            tracing::debug!(
-                ?renderer_is_nvidia,
-                "Preserving the current X11 renderer without PRIME injection"
-            );
-            return Ok(Vec::new());
-        }
-    }
 
     let connection = Connection::system().await?;
     let proxy = Proxy::new(
@@ -179,23 +153,46 @@ async fn switcheroo_gpu_environment() -> crate::Result<Vec<(String, String)>> {
     .await?;
     let gpus: Vec<HashMap<String, OwnedValue>> =
         proxy.get_property("GPUs").await?;
-    let gpus = gpus
-        .into_iter()
-        .map(|mut gpu| gpu_environment::GpuEnvironment {
-            is_default: gpu
-                .get("Default")
-                .and_then(|value| bool::try_from(value).ok()),
-            name: gpu
-                .remove("Name")
-                .and_then(|value| String::try_from(value).ok())
-                .unwrap_or_default(),
-            environment: gpu
-                .remove("Environment")
-                .and_then(|value| Vec::<String>::try_from(value).ok())
-                .unwrap_or_default(),
-        })
-        .collect();
-    Ok(gpu_environment::select_offload_environment(gpus))
+
+    for mut gpu in gpus {
+        let is_default = gpu
+            .get("Default")
+            .and_then(|value| bool::try_from(value).ok());
+        if is_default != Some(false) {
+            continue;
+        }
+
+        let Some(environment) = gpu
+            .remove("Environment")
+            .and_then(|value| Vec::<String>::try_from(value).ok())
+        else {
+            continue;
+        };
+        let mut entries = environment.chunks_exact(2);
+        let parsed = entries
+            .by_ref()
+            .filter(|entry| !entry[0].is_empty())
+            .map(|entry| (entry[0].clone(), entry[1].clone()))
+            .collect::<Vec<_>>();
+        if entries.remainder().is_empty() && !parsed.is_empty() {
+            return Ok(Some(parsed));
+        }
+    }
+
+    Ok(None)
+}
+
+#[cfg(target_os = "linux")]
+fn fallback_high_performance_gpu_environment() -> Vec<(String, String)> {
+    [
+        ("DRI_PRIME", "1"),
+        ("__NV_PRIME_RENDER_OFFLOAD", "1"),
+        ("__VK_LAYER_NV_optimus", "NVIDIA_only"),
+        ("__GLX_VENDOR_LIBRARY_NAME", "nvidia"),
+    ]
+    .into_iter()
+    .map(|(key, value)| (key.to_string(), value.to_string()))
+    .collect()
 }
 
 /// Mojang/HMCL ordered rule semantics: an empty list allows, a non-empty list
@@ -1104,26 +1101,15 @@ async fn install_minecraft_with_local_source(
             .await?;
     }
 
-    let mmc_profile = multimc::MultiMcProfile::load(
-        &instance_path,
+    let mut loader_version = get_loader_version_from_profile(
         &content_set.game_version,
         content_set.loader,
         content_set.loader_version.as_deref(),
     )
     .await?;
-    let metadata_loader =
-        mmc_profile.as_ref().map_or(content_set.loader, |profile| {
-            profile.metadata_loader(content_set.loader)
-        });
-    let mut loader_version = get_loader_version_from_profile(
-        &content_set.game_version,
-        metadata_loader,
-        content_set.loader_version.as_deref(),
-    )
-    .await?;
 
     // If no loader version is selected, try to select the stable version!
-    if metadata_loader != ModLoader::Vanilla && loader_version.is_none() {
+    if content_set.loader != ModLoader::Vanilla && loader_version.is_none() {
         let fallback = missing_loader_version_fallback(
             content_set.loader,
             &content_set.game_version,
@@ -1158,45 +1144,13 @@ async fn install_minecraft_with_local_source(
     let mut version_info = download::download_version_info(
         &state,
         version,
-        metadata_loader,
+        content_set.loader,
         loader_version.as_ref(),
         Some(repairing),
         loading_bar.as_ref(),
         reporter.as_ref(),
     )
     .await?;
-
-    if let Some(profile) = &mmc_profile {
-        let vanilla = if profile.replaces_minecraft()
-            && metadata_loader != ModLoader::Vanilla
-        {
-            Some(
-                download::download_version_info(
-                    &state,
-                    version,
-                    ModLoader::Vanilla,
-                    None,
-                    None,
-                    None,
-                    None,
-                )
-                .await?,
-            )
-        } else {
-            None
-        };
-        profile
-            .apply(
-                &mut version_info,
-                vanilla.as_ref(),
-                &state.directories.libraries_dir(),
-            )
-            .await?;
-    }
-    let version_jar =
-        mmc_profile.as_ref().map_or(version_jar.clone(), |profile| {
-            profile.cache_key(&version_jar)
-        });
 
     let key = required_java_major(&version_info);
     if let Some(reporter) = &reporter {
@@ -1563,8 +1517,7 @@ async fn install_minecraft_with_local_source(
                     cp
                 };
 
-                let mut command =
-                    java_environment::tokio_command(&java_version.path);
+                let mut command = Command::new(&java_version.path);
                 command
                     .args(&java_proxy_args)
                     .arg("-cp")
@@ -1960,6 +1913,19 @@ pub async fn launch_minecraft(
         )
         .await?
     };
+    let offline_skin_pack = if direct_launch.is_some() {
+        // Writing the offline skin pack would modify the linked folder.
+        crate::minecraft_skins::OfflineSkinPackOptions {
+            enabled_pack_id: None,
+        }
+    } else {
+        crate::minecraft_skins::prepare_offline_skin_resource_pack(
+            credentials,
+            &instance_path,
+            &content_set.game_version,
+        )
+        .await?
+    };
 
     let cache_behaviour = offline_mode.then_some(CacheBehaviour::CacheOnly);
     let mut linked_libraries = None;
@@ -2084,27 +2050,16 @@ pub async fn launch_minecraft(
                 .position(|x| x.id == "22w16a")
                 .unwrap_or(0);
 
-        let mmc_profile = multimc::MultiMcProfile::load(
-            &instance_path,
-            &content_set.game_version,
-            content_set.loader,
-            content_set.loader_version.as_deref(),
-        )
-        .await?;
-        let metadata_loader =
-            mmc_profile.as_ref().map_or(content_set.loader, |profile| {
-                profile.metadata_loader(content_set.loader)
-            });
         let loader_version = if offline_mode {
             if let Some(loader_version) = installed_offline_loader_version(
-                metadata_loader,
+                content_set.loader,
                 content_set.loader_version.as_deref(),
             ) {
                 Some(loader_version)
             } else {
                 get_loader_version_from_profile_with_cache(
                     &content_set.game_version,
-                    metadata_loader,
+                    content_set.loader,
                     content_set.loader_version.as_deref(),
                     cache_behaviour,
                 )
@@ -2113,14 +2068,15 @@ pub async fn launch_minecraft(
         } else {
             get_loader_version_from_profile_with_cache(
                 &content_set.game_version,
-                metadata_loader,
+                content_set.loader,
                 content_set.loader_version.as_deref(),
                 cache_behaviour,
             )
             .await?
         };
 
-        if metadata_loader != ModLoader::Vanilla && loader_version.is_none() {
+        if content_set.loader != ModLoader::Vanilla && loader_version.is_none()
+        {
             return Err(crate::ErrorKind::LauncherError(format!(
                 "No loader version selected for {}",
                 content_set.loader.as_str()
@@ -2137,7 +2093,7 @@ pub async fn launch_minecraft(
             download::load_local_version_info(
                 &state,
                 version,
-                metadata_loader,
+                content_set.loader,
                 loader_version.as_ref(),
             )
             .await?
@@ -2145,7 +2101,7 @@ pub async fn launch_minecraft(
             download::download_version_info(
                 &state,
                 version,
-                metadata_loader,
+                content_set.loader,
                 loader_version.as_ref(),
                 None,
                 None,
@@ -2164,7 +2120,7 @@ pub async fn launch_minecraft(
                 version_info = download::download_version_info(
                     &state,
                     version,
-                    metadata_loader,
+                    content_set.loader,
                     loader_version.as_ref(),
                     Some(true),
                     None,
@@ -2173,46 +2129,6 @@ pub async fn launch_minecraft(
                 .await?;
             }
         }
-
-        if let Some(profile) = &mmc_profile {
-            let vanilla = if profile.replaces_minecraft()
-                && metadata_loader != ModLoader::Vanilla
-            {
-                Some(if offline_mode {
-                    download::load_local_version_info(
-                        &state,
-                        version,
-                        ModLoader::Vanilla,
-                        None,
-                    )
-                    .await?
-                } else {
-                    download::download_version_info(
-                        &state,
-                        version,
-                        ModLoader::Vanilla,
-                        None,
-                        None,
-                        None,
-                        None,
-                    )
-                    .await?
-                })
-            } else {
-                None
-            };
-            profile
-                .apply(
-                    &mut version_info,
-                    vanilla.as_ref(),
-                    &state.directories.libraries_dir(),
-                )
-                .await?;
-        }
-        let version_jar =
-            mmc_profile.as_ref().map_or(version_jar.clone(), |profile| {
-                profile.cache_key(&version_jar)
-            });
 
         let quick_play_version =
             QuickPlayVersion::find_version(version_index, &minecraft.versions);
@@ -2739,32 +2655,22 @@ pub async fn launch_minecraft(
         .args(extra_game_args)
         .current_dir(instance_path.clone());
 
-    java_environment::configure_java_environment(command.as_std_mut());
+    // CARGO-set DYLD_LIBRARY_PATH breaks Minecraft on macOS during testing on playground
+    #[cfg(target_os = "macos")]
+    if std::env::var("CARGO").is_ok() {
+        command.env_remove("DYLD_FALLBACK_LIBRARY_PATH");
+    }
+    // Java options should be set in instance options (the existence of _JAVA_OPTIONS overwrites them)
+    command.env_remove("_JAVA_OPTIONS");
+
+    command.envs(env_args);
 
     #[cfg(target_os = "linux")]
     command.envs(high_performance_gpu_environment);
 
-    // Explicit instance choices override automatic GPU selection.
-    command.envs(env_args);
-
     // Overwrites the minecraft options.txt file with the settings from the profile
     // Uses 'a:b' syntax which is not quite yaml
     // Directly associated instances never write into the linked folder.
-    let offline_skin_pack = if direct_launch.is_some() {
-        // Writing the offline skin pack would modify the linked folder.
-        crate::minecraft_skins::OfflineSkinPackOptions {
-            enabled_pack_id: None,
-        }
-    } else {
-        crate::minecraft_skins::prepare_offline_skin_resource_pack(
-            credentials,
-            &instance_path,
-            &content_set.game_version,
-            &client_path,
-        )
-        .await?
-    };
-
     let options_path = instance_path.join("options.txt");
     let options_existed = options_path.exists();
 

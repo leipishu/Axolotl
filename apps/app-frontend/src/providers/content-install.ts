@@ -1346,7 +1346,7 @@ export function createContentInstall(opts: {
                 ? getCurseForgeFile(numericProjectId, Number(versionId)).then((file) => ({
                       files: [file],
                   }))
-                : getCurseForgeFiles(numericProjectId, {}),
+                : getCurseForgeFiles(numericProjectId, { index: 0, pageSize: 50 }),
         ])
         if (modalSessionId !== null && modalSessionId !== currentSessionId()) return
         const availableFiles = fileResponse.files.filter((file) => file.isAvailable)
@@ -1542,7 +1542,7 @@ export function createContentInstall(opts: {
         }
         const file = numericFileId
             ? await getCurseForgeFile(numericProjectId, numericFileId)
-            : (await getCurseForgeFiles(numericProjectId, {})).files.find(
+            : (await getCurseForgeFiles(numericProjectId, { index: 0, pageSize: 50 })).files.find(
                   (candidate) => candidate.isAvailable,
               )
         if (!file?.isAvailable) {

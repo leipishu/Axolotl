@@ -151,11 +151,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 
 import { loadInstanceContentData } from '@/helpers/instance-content'
-import {
-    discard_instance_upgrade_plan,
-    get_instance_upgrade_plan,
-    plan_instance_upgrade,
-} from '@/helpers/instance-upgrade'
+import { plan_instance_upgrade } from '@/helpers/instance-upgrade'
 import { get_loader_versions } from '@/helpers/metadata'
 import { get_game_versions } from '@/helpers/tags'
 import type { Manifest } from '@/helpers/types'
@@ -436,13 +432,6 @@ async function startPlanning() {
     flow.error.value = null
     flow.busy.value = true
     try {
-        if (flow.plan.value) {
-            try {
-                flow.setPlan(await get_instance_upgrade_plan(flow.plan.value.id))
-            } catch {
-                flow.clearPlan()
-            }
-        }
         const planned = await resolveUpgradePlanSelection(
             instanceId,
             flow.plan.value,
@@ -461,11 +450,8 @@ async function startPlanning() {
                 routeInstanceId,
                 instanceId,
             )
-        ) {
-            if (!planned.reused)
-                void discard_instance_upgrade_plan(planned.plan.id).catch(console.error)
+        )
             return
-        }
         if (!planned.reused) flow.setPlan(planned.plan)
         flow.setTargetEnvironment(planned.plan.targetEnvironment)
         await router.push(`/instance/${encodeURIComponent(instanceId)}/upgrade/compatibility`)

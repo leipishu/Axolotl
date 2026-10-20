@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ChartIcon, ClockIcon, GameIcon, TrendingUpIcon } from '@modrinth/assets'
-import { Button, commonMessages, defineMessages, useVIntl } from '@modrinth/ui'
-import { useQuery } from '@tanstack/vue-query'
-import { computed, onUnmounted } from 'vue'
+import { defineMessages, useVIntl } from '@modrinth/ui'
+import { computed, onUnmounted, ref } from 'vue'
 
 import { process_listener } from '@/helpers/events'
 import { type DailyPlaytime, get_daily_playtime } from '@/helpers/instance'
@@ -43,15 +42,7 @@ const messages = defineMessages({
 
 const HISTORY_DAYS = 90
 
-const playtimeQuery = useQuery({
-    queryKey: ['home', 'daily-playtime', HISTORY_DAYS],
-    queryFn: () => {
-        const today = new Date()
-        return get_daily_playtime(toDateKey(shiftedDate(today, -HISTORY_DAYS)), toDateKey(today))
-    },
-    staleTime: 60_000,
-})
-const dailyPlaytime = computed<DailyPlaytime[]>(() => playtimeQuery.data.value ?? [])
+const dailyPlaytime = ref<DailyPlaytime[]>([])
 
 function shiftedDate(base: Date, days: number): Date {
     const result = new Date(base)
@@ -61,6 +52,14 @@ function shiftedDate(base: Date, days: number): Date {
 
 function startOfWeek(date: Date): Date {
     return shiftedDate(date, -((date.getDay() + 6) % 7))
+}
+
+async function refreshPlaytime() {
+    const today = new Date()
+    dailyPlaytime.value = await get_daily_playtime(
+        toDateKey(shiftedDate(today, -HISTORY_DAYS)),
+        toDateKey(today),
+    ).catch((): DailyPlaytime[] => [])
 }
 
 const dailyByDate = computed(() => new Map(dailyPlaytime.value.map((entry) => [entry.date, entry])))
@@ -144,19 +143,16 @@ const thisWeekLine = computed(() => {
     )
 })
 
-let disposed = false
-let unlistenProcesses: (() => void) | undefined
-void process_listener((event: { event: string }) => {
-    if (!disposed && event.event === 'finished') void playtimeQuery.refetch()
+await refreshPlaytime()
+
+const unlistenProcesses = await process_listener(async (event: { event: string }) => {
+    if (event.event === 'finished') {
+        await refreshPlaytime()
+    }
 })
-    .then((unlisten) => {
-        if (disposed) unlisten()
-        else unlistenProcesses = unlisten
-    })
-    .catch(console.error)
+
 onUnmounted(() => {
-    disposed = true
-    unlistenProcesses?.()
+    unlistenProcesses()
 })
 </script>
 
@@ -173,17 +169,7 @@ onUnmounted(() => {
                 {{ formatMessage(messages.insights) }}
             </h2>
         </div>
-        <div v-if="playtimeQuery.isPending.value" class="flex flex-col gap-2" aria-hidden="true">
-            <div class="h-4 w-3/4 animate-pulse rounded bg-surface-4" />
-            <div class="h-4 w-1/2 animate-pulse rounded bg-surface-4" />
-        </div>
-        <Button
-            v-else-if="playtimeQuery.isError.value && !playtimeQuery.data.value"
-            @click="playtimeQuery.refetch()"
-        >
-            {{ formatMessage(commonMessages.retryButton) }}
-        </Button>
-        <p v-else-if="!hasAnyPlaytime" class="m-0 text-sm text-[var(--color-text-tertiary)]">
+        <p v-if="!hasAnyPlaytime" class="m-0 text-sm text-[var(--color-text-tertiary)]">
             {{ formatMessage(messages.empty) }}
         </p>
         <ul v-else class="m-0 flex list-none flex-col gap-2 p-0">

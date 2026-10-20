@@ -10,13 +10,6 @@ vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 vi.mock('@modrinth/ui', async () => {
     const { defineComponent, h } = await import('vue')
     return {
-        Button: defineComponent({
-            setup:
-                (_, { slots }) =>
-                () =>
-                    h('button', slots.default?.()),
-        }),
-        commonMessages: { retryButton: { defaultMessage: 'Retry' } },
         PopoutMenu: defineComponent({
             setup:
                 (_, { slots }) =>
@@ -42,7 +35,6 @@ it('cancel failures notify the user and release the task-specific busy state', a
     )
     fixture.handleError.mockReset()
     fixture.manager = {
-        initializationState: ref('ready'),
         activeJobs: ref([
             {
                 job_id: 'job',
@@ -66,26 +58,6 @@ it('cancel failures notify the user and release the task-specific busy state', a
         await flushPromises()
         expect(fixture.handleError).toHaveBeenCalledWith(error)
         expect(button().attributes('disabled')).toBeUndefined()
-    } finally {
-        wrapper.unmount()
-    }
-})
-
-it('keeps initial download loading local and offers retry after startup failure', async () => {
-    const initializationState = ref('loading')
-    const start = vi.fn().mockResolvedValue(undefined)
-    fixture.manager = { initializationState, activeJobs: ref([]), legacyDownloads: ref([]), start }
-    const wrapper = mount(DownloadCenterButton, { global: { directives: { tooltip: () => {} } } })
-    try {
-        expect(wrapper.text()).not.toContain('No active downloads')
-        initializationState.value = 'error'
-        await flushPromises()
-        const retry = wrapper.findAll('button').find((button) => button.text() === 'Retry')!
-        await retry.trigger('click')
-        expect(start).toHaveBeenCalledOnce()
-        initializationState.value = 'ready'
-        await flushPromises()
-        expect(wrapper.text()).toContain('No active downloads')
     } finally {
         wrapper.unmount()
     }

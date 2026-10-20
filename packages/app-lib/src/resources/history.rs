@@ -308,8 +308,6 @@ pub(crate) async fn prepare_rollback(
         selection_reasons: vec![],
     };
     let draft = plans::OperationDraft {
-        local_metadata: Default::default(),
-        retained_requirements: Vec::new(),
         resolve_dependencies: true,
         import_files: Default::default(),
         naming: Default::default(),

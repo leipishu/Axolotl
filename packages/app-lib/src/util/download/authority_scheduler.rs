@@ -37,9 +37,6 @@ impl Default for AuthorityScheduler {
 impl AuthorityScheduler {
     pub(crate) fn prune(&mut self) {
         self.connections.retain(|connection| {
-            if connection.is_retiring() {
-                return false;
-            }
             if connection.is_dead()
                 || connection.is_idle_expired_for_scheduler()
             {
@@ -60,7 +57,6 @@ impl AuthorityScheduler {
         connection: Arc<SharedH2Connection>,
     ) {
         if !connection.is_dead()
-            && !connection.is_retiring()
             && !self
                 .connections
                 .iter()
@@ -73,9 +69,7 @@ impl AuthorityScheduler {
     pub(crate) fn least_loaded(&self) -> Option<Arc<SharedH2Connection>> {
         self.connections
             .iter()
-            .filter(|connection| {
-                !connection.is_dead() && !connection.is_retiring()
-            })
+            .filter(|connection| !connection.is_dead())
             .min_by_key(|connection| {
                 connection.assigned_streams_for_scheduler()
             })

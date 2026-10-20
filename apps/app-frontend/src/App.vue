@@ -58,11 +58,12 @@ import {
     providePopupNotificationManager,
     ScrollToTopButton,
     SymlinkMethodCards,
+    useDebugLogger,
     useFormatBytes,
     useModalStack,
     useVIntl,
 } from '@modrinth/ui'
-import { useQueryClient } from '@tanstack/vue-query'
+import { useQuery } from '@tanstack/vue-query'
 import { getVersion } from '@tauri-apps/api/app'
 import { convertFileSrc, invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
@@ -107,18 +108,15 @@ import { useCheckDisableMouseover } from '@/composables/macCssFix.js'
 import { isOfflineAccountRestrictedError } from '@/composables/useAntiPiracyStatus'
 import { useDropImport } from '@/composables/useDropImport'
 import { minecraftLaunchErrorKey } from '@/composables/useMinecraftLaunchError'
-import { setupMojangAuthMonitor, useMojangAuthStatus } from '@/composables/useMojangAuth'
 import { useNetworkStatus } from '@/composables/useNetworkStatus'
 import { AxolotlBrandConfig, config, getOfficialLabrinthBaseUrl } from '@/config'
 import { trackEvent } from '@/helpers/analytics'
+import { check_reachable } from '@/helpers/auth.js'
 import { get_user, get_version } from '@/helpers/cache.js'
 import { configureCurseForgeManualDownloadWatcher } from '@/helpers/curseforge'
 import { applySettingChanges } from '@/helpers/deep-link-settings.ts'
 import { resolveOpenRoute, resolveSettingsRoute } from '@/helpers/deep-links.ts'
-import {
-    DIRECT_LINKS_SYNCED_EVENT,
-    startConfiguredDirectLinkSync,
-} from '@/helpers/direct-link-sync'
+import { DIRECT_LINKS_SYNCED_EVENT, syncConfiguredDirectLinks } from '@/helpers/direct-link-sync'
 import { getMissingContentScannerSettings } from '@/helpers/downloads-scanner'
 import { classifyDroppedItem } from '@/helpers/drop'
 import {
@@ -127,10 +125,13 @@ import {
     java_download_confirmation_listener,
     warning_listener,
 } from '@/helpers/events.js'
-import { fileOperationError } from '@/helpers/file-operation-errors'
 import { install_create_modpack_instance, install_get_modpack_preview } from '@/helpers/install'
 import { type DirectLinkSyncReport, get as getInstance, run } from '@/helpers/instance'
 import { type BackupOperation, cancelBackup, listBackupOperations } from '@/helpers/instance-backup'
+import {
+    reconcileMojangAuthSourceAtStartup,
+    reconcileMojangAuthSourceIfMirrored,
+} from '@/helpers/mojang-auth'
 import { cancelLogin, get as getCreds, login, logout } from '@/helpers/mr_auth.ts'
 import { installNativeEditMenuBoundary } from '@/helpers/native-edit-menu'
 import { getNavShortcutEnabled } from '@/helpers/nav-shortcut-state'
@@ -143,7 +144,6 @@ import {
 } from '@/helpers/resource-operation-logic'
 import { getQuickScrollEnabled, getShowScrollTop } from '@/helpers/scroll-top-state'
 import {
-    appSettingsKeys,
     get as getSettings,
     getLastBrowseContentProjectType,
     getPrivacySettings,
@@ -205,6 +205,7 @@ import { setupLoadingStateProvider } from '@/providers/setup/loading-state'
 import { useError } from '@/store/error.js'
 import { useTheming } from '@/store/state'
 
+import { get_available_capes, get_available_skins } from './helpers/skins'
 import { AppNotificationManager } from './providers/app-notifications'
 import { AppPopupNotificationManager } from './providers/app-popup-notifications'
 
@@ -370,7 +371,7 @@ const {
     fileDrop,
 } = setupProviders(notificationManager, popupNotificationManager, stateInitialization)
 
-const { offline } = useNetworkStatus()
+const { browserOffline, offline, setNetworkReachable } = useNetworkStatus()
 
 const showOnboarding = ref(false)
 const onboardingMode = ref('main')
@@ -447,9 +448,52 @@ const javaDownloadConfirmationModal = ref()
 const pendingUpdateAnnouncementVersion = ref(null)
 const updateAnnouncementShowing = ref(false)
 
-setupMojangAuthMonitor(stateInitialized)
-const mojangAuth = useMojangAuthStatus()
-const authUnreachable = computed(() => !offline.value && mojangAuth.reachable.value === false)
+const mojangAuthSourceReady = ref(false)
+
+const authUnreachableDebug = useDebugLogger('AuthReachableChecker')
+const authServerRefetchInterval = ref(5 * 60 * 1000)
+const authServerQuery = useQuery({
+    queryKey: ['authServerReachability'],
+    enabled: computed(() => mojangAuthSourceReady.value && !browserOffline.value),
+    queryFn: async () => {
+        try {
+            await check_reachable()
+            setNetworkReachable(true)
+            authServerRefetchInterval.value = 5 * 60 * 1000
+            authUnreachableDebug('Auth servers are reachable')
+        } catch (error) {
+            setNetworkReachable(false)
+            // Keep probing while the temporary outage is active so the launcher
+            // can return online without requiring a restart or manual refresh.
+            authServerRefetchInterval.value = 15 * 1000
+            throw error
+        }
+        try {
+            await reconcileMojangAuthSourceIfMirrored()
+        } catch (error) {
+            console.warn('Failed to reconcile the Mojang auth source', error)
+        }
+        return true
+    },
+    refetchInterval: () => authServerRefetchInterval.value,
+    // A single slow probe is not enough to declare the auth servers down.
+    retry: 1,
+    retryDelay: 1000,
+    refetchOnWindowFocus: false,
+})
+
+const authUnreachable = computed(
+    () => !offline.value && authServerQuery.isError.value && !authServerQuery.isLoading.value,
+)
+
+watch(
+    () => authServerQuery.error.value,
+    (error) => {
+        if (!error) return
+        setNetworkReachable(false)
+        console.warn('Failed to reach auth servers', error)
+    },
+)
 
 const appUpdateDownload = {
     progress: appUpdateState.progress,
@@ -732,14 +776,13 @@ onMounted(async () => {
 
     // Background maintenance must not compete with first paint / route enter.
     runWhenIdle(() => {
-        if (appUnmounted) return
         void checkUpdates()
         void warnIfRunningElevated()
         startDirectLinkSync()
     })
 })
 
-let appUnmounted = false
+let directLinkSync: (() => Promise<void>) | undefined
 let stopDirectLinkSync: (() => void) | undefined
 let directLinkSyncErrorSignature = ''
 
@@ -801,12 +844,22 @@ function startDirectLinkSync() {
             return []
         }
     }
-    stopDirectLinkSync?.()
-    stopDirectLinkSync = startConfiguredDirectLinkSync(readRoots, handleError)
+    const sync = () => syncConfiguredDirectLinks(readRoots()).catch(handleError)
+    const handleWindowFocus = () => {
+        void sync()
+    }
+
+    directLinkSync = sync
+    window.addEventListener('focus', handleWindowFocus)
+    void sync()
+    stopDirectLinkSync = () => {
+        window.removeEventListener('focus', handleWindowFocus)
+        if (directLinkSync === sync) directLinkSync = undefined
+        if (stopDirectLinkSync) stopDirectLinkSync = undefined
+    }
 }
 
 onUnmounted(async () => {
-    appUnmounted = true
     windowAppearance.dispose()
     stopNativeEditMenu?.()
     if (maximizedStateTimer) clearTimeout(maximizedStateTimer)
@@ -1326,8 +1379,7 @@ const messages = defineMessages({
 
 notificationManager.errorTitleProvider = () => formatMessage(messages.errorOccurred)
 notificationManager.errorTextFormatter = (error) =>
-    fileOperationError(error, getOsType(), formatMessage) ??
-    (isResourceOperationError(error) ? resourceOperationError(error, formatMessage) : null)
+    isResourceOperationError(error) ? resourceOperationError(error, formatMessage) : null
 
 function getErrorNotificationDetails(notification) {
     const details = [notification.title, notification.text, notification.errorCode].filter(Boolean)
@@ -1370,12 +1422,17 @@ async function applyThemeFromSettings(s: Awaited<ReturnType<typeof getSettings>>
     themeStore.setCustomBackgroundClass()
 }
 
-const queryClient = useQueryClient()
-
 async function setupApp() {
+    try {
+        await reconcileMojangAuthSourceAtStartup()
+    } catch (error) {
+        handleError(error)
+    } finally {
+        mojangAuthSourceReady.value = true
+    }
+
     const initialSettings = await getSettings()
-    queryClient.setQueryData(appSettingsKeys.all, initialSettings)
-    void downloadManager.start().catch(handleError)
+    await downloadManager.start()
     const {
         native_decorations,
         theme,
@@ -1415,14 +1472,11 @@ async function setupApp() {
     // flag) keeps tracking the OS language and stores a concrete locale for backend
     // checks that compare against codes like `zh-CN`.
     if (!locale) setFollowSystemLocale(true)
-    const localePreparation = applyLocalePreference(locale).then(async (resolvedLocale) => {
-        if (!locale || locale !== resolvedLocale) {
-            initialSettings.locale = resolvedLocale
-            await updateSettings({ locale: resolvedLocale })
-        }
-    })
-    // Attach a handler immediately while window/theme setup proceeds in parallel.
-    void localePreparation.catch(console.error)
+    const resolvedLocale = applyLocalePreference(locale)
+    if (!locale || locale !== resolvedLocale) {
+        initialSettings.locale = resolvedLocale
+        await updateSettings({ locale: resolvedLocale })
+    }
 
     const defaultPageRoutes = {
         Home: '/',
@@ -1485,7 +1539,6 @@ async function setupApp() {
             themeStore[shortcut.enabledField] = getNavShortcutEnabled(shortcut.id)
     }
     themeStore.shortcutBindings = resolveAllBindings()
-    await localePreparation
     stateInitialized.value = true
     if (privacyConsentPending.value) {
         await nextTick()
@@ -1551,6 +1604,15 @@ async function setupApp() {
 
     get_opening_command().then(handleCommand)
     fetchCredentials()
+
+    try {
+        const skins = (await get_available_skins()) ?? []
+        const capes = (await get_available_capes()) ?? []
+        const { generateSkinPreviews } = await import('./helpers/rendering/skin-preview-renderer')
+        generateSkinPreviews(skins, capes)
+    } catch (error) {
+        console.warn('Failed to generate skin previews in app setup.', error)
+    }
 }
 
 type SystemAccentColorPayload = {
@@ -1591,7 +1653,6 @@ async function replayOnboarding(mode) {
     onboardingReplay.value = true
     onboardingMode.value = mode
     if (mode === 'main') await router.replace('/')
-    if (mode === 'logagent') await router.replace('/settings#launch-defaults')
     showOnboarding.value = true
 }
 
@@ -1949,6 +2010,7 @@ router.afterEach((to, from, failure) => {
         failed: failure,
     })
     if (!failure) {
+        void directLinkSync?.()
         if (stateInitialized.value) syncDiscordActivity(to)
     }
     setTimeout(() => {
@@ -2420,7 +2482,7 @@ async function handlePrivilegedCommand(e) {
         await updateSettings(diffSettings(before, latest)).catch(handleError)
         await applyThemeFromSettings(latest)
         setFollowSystemLocale(!latest.locale || latest.locale === 'system')
-        await applyLocalePreference(latest.locale)
+        applyLocalePreference(latest.locale)
         addNotification({
             title: formatMessage(privilegedMessages.applied),
             type: 'success',

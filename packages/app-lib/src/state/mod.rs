@@ -173,22 +173,6 @@ pub struct State {
 }
 
 impl State {
-    pub async fn maintain_database_backups(&self) -> crate::Result<()> {
-        db_backup::maintain_app_db_backups(
-            self.pool.connect_options().get_filename(),
-        )
-        .await
-    }
-
-    /// Stops further database writes before recording a clean-shutdown fingerprint.
-    pub async fn finish_database_session(&self) -> crate::Result<()> {
-        let database = self.pool.connect_options().get_filename().to_path_buf();
-        tokio::time::timeout(Duration::from_secs(3), self.pool.close()).await.map_err(|_| {
-            crate::ErrorKind::OtherError("Database connections did not close before shutdown; next startup will run a full integrity check".into())
-        })?;
-        db_backup::mark_clean_shutdown(&database).await
-    }
-
     pub async fn resources(
         &self,
     ) -> crate::resources::ResourceResult<&Arc<crate::resources::ResourceService>>

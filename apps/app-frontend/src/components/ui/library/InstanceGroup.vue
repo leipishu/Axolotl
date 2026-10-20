@@ -94,7 +94,6 @@ const props = defineProps<{
     sectionKey: string
     groupName?: string
     instances: GameInstance[]
-    runningInstanceIds: Set<string>
     grouping: string
     isCollapsed: boolean
     displayMode: string
@@ -387,7 +386,6 @@ function onStartLongPress(instanceId: string) {
                             >
                                 <Instance
                                     :instance="instance"
-                                    :playing="runningInstanceIds.has(instance.id)"
                                     :disabled="selectMode || isDragging"
                                     :variant="displayMode === 'cards' ? 'library' : 'standard'"
                                     :class="{
@@ -450,7 +448,6 @@ function onStartLongPress(instanceId: string) {
                             <div :class="{ 'pointer-events-none': selectMode }">
                                 <Instance
                                     :instance="instance"
-                                    :playing="runningInstanceIds.has(instance.id)"
                                     :disabled="selectMode"
                                     :variant="displayMode === 'cards' ? 'library' : 'standard'"
                                     :class="{

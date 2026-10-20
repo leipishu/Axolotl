@@ -515,64 +515,6 @@ pub(crate) async fn execute(
         )
         .await?;
     }
-    let service = state.resources().await?;
-    let mut retained_parents = HashMap::new();
-    for (action, (path, kind, _, _, _)) in plan.actions.iter().zip(&downloads) {
-        let node = plan
-            .nodes
-            .iter()
-            .find(|node| node.id == action.node_id)
-            .ok_or_else(|| input("action has no resource node"))?;
-        let selection = ResourceSelection {
-            id: node.id.clone(),
-            resource: node.resource.clone(),
-            release: ReleaseSelection::Artifact {
-                reference: action.target.reference.clone(),
-            },
-            resource_type: *kind,
-            scope: node.scope.clone(),
-            entry_id: Some(action.entry_id.clone()),
-        };
-        let requirements = service
-            .requirements_for(&selection, &draft.retained_requirements)
-            .await
-            .map_err(|error| input(error.to_string()))?;
-        let metadata = if requirements
-            .iter()
-            .any(|requirement| requirement.local_mod_id.is_some())
-        {
-            let bytes = bytes::Bytes::from(tokio::fs::read(path).await?);
-            Some(crate::mod_metadata::extract_mod_metadata(&bytes)
-                .ok_or_else(|| input("cannot verify the updated mod's dependency version"))?)
-        } else {
-            None
-        };
-        for requirement in requirements {
-            if let Some(id) = &requirement.local_mod_id {
-                let metadata = metadata.as_ref().unwrap();
-                if &metadata.mod_id != id
-                    || !requirement.version_constraint.as_ref().is_none_or(
-                        |constraint| {
-                            metadata.version.as_ref().is_some_and(|version| {
-                                plans::requirements::mod_version_matches(
-                                    constraint, version,
-                                )
-                            })
-                        },
-                    )
-                {
-                    return Err(input(format!(
-                        "updated mod does not satisfy {}'s requirement for {id}",
-                        requirement.parent.relative_path
-                    )));
-                }
-            }
-            retained_parents.insert(
-                requirement.parent.entry_id.clone(),
-                requirement.parent,
-            );
-        }
-    }
     canceled(&cancel)?;
     let _writer = state.acquire_install_db_permit().await?;
     let _lock = state.lock_instance_content_exclusive(instance_id).await;
@@ -612,18 +554,6 @@ pub(crate) async fn execute(
         .map_err(|error| input(error.to_string()))?;
     if current_revision != plan.instance_revision {
         return Err(input("instance changed since resource review"));
-    }
-    for parent in retained_parents.values() {
-        if !matches_file(
-            &checked_path(&root, &parent.relative_path)?,
-            &parent.integrity,
-        )
-        .await?
-        {
-            return Err(input(
-                "installed dependent changed since resource review",
-            ));
-        }
     }
     let mut journal = Vec::new();
     for (index, action) in plan.actions.iter().enumerate() {
@@ -681,22 +611,6 @@ pub(crate) async fn execute(
                 .iter()
                 .find(|item| &item.entry_id == entry_id)
                 .ok_or_else(|| input("satisfied dependency disappeared"))?;
-            if let Some(action) = plan
-                .actions
-                .iter()
-                .find(|action| &action.entry_id == entry_id)
-                && node.artifact.is_none()
-                && (action
-                    .current
-                    .as_ref()
-                    .is_some_and(|current| !current.enabled)
-                    || action.target_relative_path.rsplit('/').next()
-                        != item.relative_path.rsplit('/').next())
-            {
-                return Err(input(
-                    "updated local file no longer satisfies its filename dependency",
-                ));
-            }
             if !item.enabled
                 || !matches_file(
                     &checked_path(&root, &item.relative_path)?,

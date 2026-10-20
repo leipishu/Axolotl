@@ -314,7 +314,6 @@ async function enrich(value: ResourceOperationPlan, signal: AbortSignal, current
             const cachedRef =
                 node.artifact?.reference.release.project ??
                 (node.resource.kind === 'source' ? node.resource.project : null)
-            if (cachedRef?.source === 'local') return
             if (node.state === 'satisfied' && cachedRef) {
                 const [document] = await resourceProjectDocuments(
                     cachedRef.source,
@@ -736,9 +735,8 @@ defineExpose({ show, showInstall, showInstallSelection, cancel })
                 </p>
                 <template
                     v-if="
-                        node.artifact &&
-                        (node.compatibility.gameVersion !== 'compatible' ||
-                            node.compatibility.loader !== 'compatible')
+                        node.compatibility.gameVersion !== 'compatible' ||
+                        node.compatibility.loader !== 'compatible'
                     "
                 >
                     <p class="m-0 text-sm">

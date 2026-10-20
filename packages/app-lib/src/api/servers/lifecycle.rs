@@ -16,10 +16,8 @@ use crate::event::ServerPayloadType;
 use crate::event::emit::emit_server;
 use crate::state::{clear_log_buffer, get_log_buffer, push_log_line};
 use crate::util::io::IOError;
-use crate::util::java_environment;
 use crate::{ErrorKind, Result};
 
-use super::files::safe_relative_join;
 use super::logs::{
     analyze_exit_reason, stream_server_output, stream_server_pty_output,
     tail_server_log_file,
@@ -133,7 +131,7 @@ async fn start_inner(
         forge_launch_args(&dir)?
     } else {
         let jar_name = resolve_jar_name(&manifest);
-        let jar_path = safe_relative_join(&dir, &jar_name)?;
+        let jar_path = dir.join(&jar_name);
         if !jar_path.exists() {
             return Err(ErrorKind::LauncherError(format!(
                 "Server jar not found: {jar_name}. Download the server files first."
@@ -205,7 +203,6 @@ async fn start_inner(
                 .as_error()
             })?;
             let mut command = CommandBuilder::new(&java);
-            java_environment::configure_pty_java_environment(&mut command);
             command.args(&args);
             command.cwd(&dir);
             command.env("TERM", "xterm-256color");
@@ -227,7 +224,7 @@ async fn start_inner(
                 Some(reader),
             )
         } else {
-            let mut command = java_environment::tokio_command(&java);
+            let mut command = Command::new(&java);
             command.args(&args);
             command.current_dir(&dir);
             for variable in removed_environment {
@@ -282,11 +279,9 @@ async fn start_inner(
     // so these lines stop the console from looking frozen.
     let loader_first_run =
         matches!(manifest.server_type.as_str(), "fabric" | "quilt")
-            && !safe_relative_join(
-                &dir,
-                &format!("{}-server-launch.jar", manifest.server_type),
-            )?
-            .exists();
+            && !dir
+                .join(format!("{}-server-launch.jar", manifest.server_type))
+                .exists();
 
     log_server_step(
         server_id,
@@ -369,9 +364,7 @@ async fn run_pre_launch_hook(
     }
     let program = parts.remove(0);
     push_log_line(server_id, format!("[hook] Running pre-launch hook: {hook}"));
-    let mut command = Command::new(&program);
-    java_environment::configure_child_environment(command.as_std_mut());
-    let status = command
+    let status = Command::new(&program)
         .args(&parts)
         .current_dir(dir)
         .status()

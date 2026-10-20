@@ -49,7 +49,7 @@ pub async fn build_job_support_details(
     write_raw_snapshot(&mut details, &snapshot);
     write_latest_log(&mut details, state).await;
 
-    censor_support_text(details, &state.pool).await
+    censor_support_text(details, state).await
 }
 
 fn result_summary(
@@ -672,17 +672,10 @@ fn read_file_tail(path: &Path, max_bytes: u64) -> crate::Result<String> {
 }
 
 pub(crate) async fn censor_support_text(
-    text: String,
-    pool: &sqlx::SqlitePool,
-) -> crate::Result<String> {
-    Ok(censor_ip_addresses(censor_credentials(text, pool).await?))
-}
-
-pub(crate) async fn censor_credentials(
     mut text: String,
-    pool: &sqlx::SqlitePool,
+    state: &State,
 ) -> crate::Result<String> {
-    for credentials in ModrinthCredentials::get_all(pool)
+    for credentials in ModrinthCredentials::get_all(&state.pool)
         .await?
         .into_iter()
         .map(|credentials| credentials.1)
@@ -694,9 +687,11 @@ pub(crate) async fn censor_credentials(
         );
     }
 
-    for token in minecraft_tokens(pool).await? {
+    for token in minecraft_tokens(&state.pool).await? {
         replace_nonempty(&mut text, &token, "{MINECRAFT_TOKEN}");
     }
+
+    text = censor_ip_addresses(text);
 
     Ok(text)
 }
@@ -704,13 +699,10 @@ pub(crate) async fn censor_credentials(
 async fn minecraft_tokens(
     pool: &sqlx::SqlitePool,
 ) -> crate::Result<Vec<String>> {
-    // Offline accounts use a non-secret "0" placeholder as their access token.
-    let rows = sqlx::query(
-        "SELECT access_token, refresh_token FROM minecraft_users
-         WHERE account_type != 'offline'",
-    )
-    .fetch_all(pool)
-    .await?;
+    let rows =
+        sqlx::query("SELECT access_token, refresh_token FROM minecraft_users")
+            .fetch_all(pool)
+            .await?;
     let mut tokens = Vec::with_capacity(rows.len() * 2);
 
     for row in rows {
@@ -756,136 +748,4 @@ fn censor_ip_addresses(text: String) -> String {
             }
         })
         .into_owned()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::state::Credentials;
-
-    async fn test_pool() -> sqlx::SqlitePool {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-        sqlx::migrate!().run(&pool).await.unwrap();
-        pool
-    }
-
-    async fn insert_online_account(
-        pool: &sqlx::SqlitePool,
-        account_type: &str,
-        access_token: &str,
-        refresh_token: &str,
-    ) {
-        sqlx::query(
-            "INSERT INTO minecraft_users (
-                account_id, uuid, username, account_type,
-                access_token, refresh_token, expires
-            ) VALUES ($1, $2, 'OnlineUser', $3, $4, $5, 0)",
-        )
-        .bind(format!("{account_type}:test"))
-        .bind(uuid::Uuid::new_v4().to_string())
-        .bind(account_type)
-        .bind(access_token)
-        .bind(refresh_token)
-        .execute(pool)
-        .await
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn offline_account_preserves_log_numbers() {
-        let pool = test_pool().await;
-        Credentials::offline("OfflineUser")
-            .unwrap()
-            .upsert(&pool)
-            .await
-            .unwrap();
-        let log = "2026-10-19 10:00:00 INFO Minecraft 1.20.1 loaded 100 mods; exit code 0";
-
-        let censored =
-            censor_support_text(log.to_string(), &pool).await.unwrap();
-
-        assert_eq!(censored, log);
-    }
-
-    #[tokio::test]
-    async fn mixed_accounts_censor_online_tokens_and_preserve_numbers() {
-        let pool = test_pool().await;
-        Credentials::offline("OfflineUser")
-            .unwrap()
-            .upsert(&pool)
-            .await
-            .unwrap();
-        insert_online_account(&pool, "microsoft", "ms-access", "ms-refresh")
-            .await;
-        insert_online_account(&pool, "yggdrasil", "ygg-access", "ygg-refresh")
-            .await;
-        let log = "Minecraft 1.20.1; exit code 0; ms-access ms-refresh ygg-access ygg-refresh";
-
-        let censored =
-            censor_support_text(log.to_string(), &pool).await.unwrap();
-
-        assert_eq!(
-            censored,
-            "Minecraft 1.20.1; exit code 0; {MINECRAFT_TOKEN} {MINECRAFT_TOKEN} {MINECRAFT_TOKEN} {MINECRAFT_TOKEN}"
-        );
-    }
-
-    #[tokio::test]
-    async fn empty_online_tokens_preserve_log_text() {
-        let pool = test_pool().await;
-        insert_online_account(&pool, "microsoft", "", "").await;
-        let log = "Minecraft 1.20.1; exit code 0";
-
-        let censored =
-            censor_support_text(log.to_string(), &pool).await.unwrap();
-
-        assert_eq!(censored, log);
-    }
-
-    #[tokio::test]
-    async fn network_report_preserves_ips_while_censoring_credentials() {
-        let pool = test_pool().await;
-        insert_online_account(&pool, "microsoft", "ms-access", "ms-refresh")
-            .await;
-        insert_online_account(&pool, "yggdrasil", "ygg-access", "ygg-refresh")
-            .await;
-        ModrinthCredentials {
-            session: "modrinth-session".to_string(),
-            expires: chrono::Utc::now(),
-            user_id: "test-user".to_string(),
-            active: true,
-        }
-        .upsert(&pool)
-        .await
-        .unwrap();
-        let report = serde_json::json!({
-            "resolved_ips": ["192.0.2.1", "2001:db8::1"],
-            "peer_ip": "2001:db8::2",
-            "details": "ms-access ms-refresh ygg-access ygg-refresh modrinth-session",
-        });
-
-        let censored =
-            censor_credentials(report.to_string(), &pool).await.unwrap();
-        let censored: serde_json::Value =
-            serde_json::from_str(&censored).unwrap();
-
-        assert_eq!(censored["resolved_ips"], report["resolved_ips"]);
-        assert_eq!(censored["peer_ip"], report["peer_ip"]);
-        assert_eq!(
-            censored["details"],
-            "{MINECRAFT_TOKEN} {MINECRAFT_TOKEN} {MINECRAFT_TOKEN} {MINECRAFT_TOKEN} {MODRINTH_ACCESS_TOKEN}"
-        );
-
-        let log = censor_support_text(report.to_string(), &pool)
-            .await
-            .unwrap();
-        assert!(!log.contains("192.0.2.1"));
-        assert!(!log.contains("2001:db8::1"));
-        assert!(!log.contains("2001:db8::2"));
-        assert!(!log.contains("ms-access"));
-    }
 }

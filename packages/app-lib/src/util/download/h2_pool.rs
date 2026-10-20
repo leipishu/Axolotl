@@ -67,15 +67,12 @@ impl H2ConnectError {
 /// A live shared HTTP/2 connection to one authority.
 pub struct SharedH2Connection {
     authority: String,
-    pub(crate) remote_addr: Option<std::net::SocketAddr>,
     sender: Mutex<SendRequest<Bytes>>,
     // One permit represents the shared TCP/TLS connection, not every H2
     // stream opened through it.
     physical_budget: Mutex<Option<super::native_budget::NativeBudgetPermit>>,
     /// Set to true by the driver task when the connection terminates.
     dead: Arc<std::sync::atomic::AtomicBool>,
-    retiring: std::sync::atomic::AtomicBool,
-    drained: Arc<Notify>,
     /// Number of application streams currently assigned to this connection.
     /// This is deliberately separate from HTTP/2's peer stream accounting: it
     /// lets an asset batch distribute work across sibling TCP connections.
@@ -91,7 +88,6 @@ pub struct SharedH2Connection {
 pub(crate) struct H2StreamActivity {
     active_streams: Arc<AtomicUsize>,
     last_activity: Arc<Mutex<std::time::Instant>>,
-    drained: Arc<Notify>,
 }
 
 impl Drop for H2StreamActivity {
@@ -102,7 +98,6 @@ impl Drop for H2StreamActivity {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                 std::time::Instant::now();
-            self.drained.notify_one();
         }
     }
 }
@@ -115,12 +110,9 @@ impl SharedH2Connection {
     ) -> Self {
         Self {
             authority,
-            remote_addr: None,
             sender: Mutex::new(sender),
             physical_budget: Mutex::new(physical_budget),
             dead: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            retiring: std::sync::atomic::AtomicBool::new(false),
-            drained: Arc::new(Notify::new()),
             active_streams: Arc::new(AtomicUsize::new(0)),
             bytes_transferred: AtomicUsize::new(0),
             reserved_streams: Arc::new(AtomicUsize::new(0)),
@@ -136,36 +128,8 @@ impl SharedH2Connection {
         Self::new("test.invalid:443".to_string(), sender, None)
     }
 
-    #[cfg(test)]
-    pub(crate) async fn cache_for_test(
-        route: &DownloadRoute,
-        sender: SendRequest<Bytes>,
-    ) -> Arc<Self> {
-        let authority = crate::util::fetch::url_authority(&route.url).unwrap();
-        let budget = super::native_budget::acquire(route).await.unwrap();
-        let connection =
-            Arc::new(Self::new(authority.clone(), sender, Some(budget)));
-        let slot = connection_slot(&super::proxy_context::authority_key(
-            &authority,
-            route.proxy,
-        ))
-        .await;
-        *slot.lock().await = Some(connection.clone());
-        connection
-    }
-
     pub fn is_dead(&self) -> bool {
         self.dead.load(std::sync::atomic::Ordering::Acquire)
-    }
-
-    pub(crate) fn is_retiring(&self) -> bool {
-        self.retiring.load(Ordering::Acquire)
-    }
-
-    pub(crate) fn retire(&self) {
-        let _sender = self.sender.lock().unwrap_or_else(|p| p.into_inner());
-        self.retiring.store(true, Ordering::Release);
-        self.drained.notify_one();
     }
 
     pub(crate) fn active_streams(&self) -> usize {
@@ -207,7 +171,6 @@ impl SharedH2Connection {
         H2StreamActivity {
             active_streams: Arc::clone(&self.active_streams),
             last_activity: Arc::clone(&self.last_activity),
-            drained: Arc::clone(&self.drained),
         }
     }
 
@@ -315,14 +278,7 @@ impl SharedH2Connection {
                 "HTTP/2 stream admission waited for peer or connection capacity"
             );
         }
-        let (response, _) = {
-            let _admission =
-                self.sender.lock().unwrap_or_else(|p| p.into_inner());
-            if self.is_retiring() || self.is_dead() {
-                return Err(h2::Reason::REFUSED_STREAM.into());
-            }
-            sender.send_request(request, true)?
-        };
+        let (response, _) = sender.send_request(request, true)?;
         let response = tokio::time::timeout(STREAM_READY_TIMEOUT, response)
             .await
             .map_err(|_| h2::Error::from(h2::Reason::ENHANCE_YOUR_CALM))??;
@@ -582,7 +538,6 @@ async fn establish(
 		)
 	})?;
 
-    let remote_addr = tcp.peer_addr().ok();
     let server_name =
         ServerName::try_from(host.to_string()).map_err(|error| {
             H2ConnectError::new(
@@ -630,17 +585,18 @@ async fn establish(
     // window configured before the handshake.
     connection.set_target_window_size(64 * 1024 * 1024);
 
-    let mut shared =
-        SharedH2Connection::new(authority.clone(), sender, physical_budget);
-    shared.remote_addr = remote_addr;
-    let shared = Arc::new(shared);
+    let shared = Arc::new(SharedH2Connection::new(
+        authority.clone(),
+        sender,
+        physical_budget,
+    ));
 
     spawn_connection_driver(&shared, connection, IDLE_EVICTION_TIMEOUT);
 
     Ok(shared)
 }
 
-pub(crate) fn spawn_connection_driver<F>(
+fn spawn_connection_driver<F>(
     shared: &Arc<SharedH2Connection>,
     connection: F,
     idle_timeout: Duration,
@@ -652,8 +608,6 @@ where
     let connection_budget = Arc::downgrade(shared);
     let idle_connection = connection_budget.clone();
     let evict = shared.evict.clone();
-    let drained = shared.drained.clone();
-    let retiring_connection = connection_budget.clone();
     let authority = shared.authority.clone();
     tokio::spawn(async move {
         tokio::select! {
@@ -662,17 +616,6 @@ where
                 tracing::debug!(authority, "Evicting idle shared HTTP/2 connection");
             }
             _ = wait_for_idle(idle_connection, idle_timeout) => {},
-            _ = async {
-                loop {
-                    let notified = drained.notified();
-                    let Some(shared) = retiring_connection.upgrade() else { return; };
-                    if shared.is_retiring() && shared.active_streams() == 0 {
-                        return;
-                    }
-                    drop(shared);
-                    notified.await;
-                }
-            } => {},
         }
         dead.store(true, std::sync::atomic::Ordering::Release);
         if let Some(connection_budget) = connection_budget.upgrade() {
@@ -782,9 +725,7 @@ async fn shared_connection_single(
             )
         })?;
     if let Some(connection) = cached.as_ref().filter(|connection| {
-        !connection.is_dead()
-            && !connection.is_retiring()
-            && !connection.is_idle_expired()
+        !connection.is_dead() && !connection.is_idle_expired()
     }) {
         if !reserve_native_budget || connection.has_physical_budget() {
             tracing::debug!(authority, "Reusing shared HTTP/2 connection");
@@ -797,13 +738,9 @@ async fn shared_connection_single(
         ));
     }
     if cached.as_ref().is_some_and(|connection| {
-        connection.is_dead()
-            || connection.is_retiring()
-            || connection.is_idle_expired()
+        connection.is_dead() || connection.is_idle_expired()
     }) {
-        if let Some(connection) = cached.as_ref()
-            && !connection.is_retiring()
-        {
+        if let Some(connection) = cached.as_ref() {
             connection.evict();
         }
         *cached = None;
@@ -1015,7 +952,8 @@ pub(crate) async fn has_live_connection(route: &DownloadRoute) -> bool {
     };
     drop(connections);
 
-    slot.lock().await.as_ref().is_some_and(|connection| {
-        !connection.is_dead() && !connection.is_retiring()
-    })
+    slot.lock()
+        .await
+        .as_ref()
+        .is_some_and(|connection| !connection.is_dead())
 }

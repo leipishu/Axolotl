@@ -992,12 +992,6 @@ impl RemoteRelease {
                     },
                 },
                 (None, None, Some(name)) => DependencyTarget::FileName { name },
-                (None, None, None)
-                    if dependency.dependency_type
-                        == ResourceDependencyKind::Embedded =>
-                {
-                    continue;
-                }
                 _ => {
                     return Err(ResourceError::InvalidResponse(
                         "dependency has no target".into(),

@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::future::Future;
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::pin::Pin;
 
 use zip::ZipArchive;
@@ -321,13 +321,23 @@ pub(crate) async fn generate_pack_from_version_id_with_reporter(
                 "Specified version has no files".to_string(),
             )
         })?;
+    let file_name = Path::new(&pack_file.filename);
+    if file_name.components().count() != 1
+        || !matches!(file_name.components().next(), Some(Component::Normal(_)))
+    {
+        return Err(crate::ErrorKind::InputError(
+            "Modrinth returned an invalid modpack file name".to_string(),
+        )
+        .into());
+    }
     let hash = pack_file.hashes.get("sha1");
-    let pack_path = modpack_cache_path(
-        &state.directories.caches_dir().join("modpacks"),
-        &project_id,
-        &version_id,
-        &pack_file.filename,
-    )?;
+    let pack_path = state
+        .directories
+        .caches_dir()
+        .join("modpacks")
+        .join(&project_id)
+        .join(&version_id)
+        .join(file_name);
 
     let metadata =
         crate::api::instance::get(&instance_id)
@@ -526,70 +536,8 @@ pub(crate) async fn generate_pack_from_version_id_with_reporter(
     })
 }
 
-fn modpack_cache_path(
-    root: &Path,
-    project_id: &str,
-    version_id: &str,
-    filename: &str,
-) -> crate::Result<PathBuf> {
-    let mut path = root.to_path_buf();
-    for segment in [project_id, version_id, filename] {
-        if segment.contains('/') {
-            return Err(crate::ErrorKind::InputError(
-                "Invalid modpack cache path component".to_string(),
-            )
-            .into());
-        }
-        path = crate::util::io::safe_relative_join(&path, segment)?;
-    }
-    Ok(path)
-}
-
-#[cfg(test)]
-mod cache_path_tests {
-    use super::modpack_cache_path;
-    use std::path::Path;
-
-    #[test]
-    fn cache_components_cannot_escape_their_directories() {
-        let root = Path::new("modpacks");
-        assert_eq!(
-            modpack_cache_path(root, "project", "version", "pack.mrpack")
-                .unwrap(),
-            root.join("project/version/pack.mrpack")
-        );
-        for malicious in [
-            "../outside",
-            "nested/name",
-            r"..\outside",
-            "C:/outside",
-            "C:outside",
-            r"\\server\share",
-            ".",
-            "",
-            "NUL",
-            "pack.mrpack:stream",
-            ".. ",
-        ] {
-            for position in 0..3 {
-                let mut components = ["project", "version", "pack.mrpack"];
-                components[position] = malicious;
-                assert!(
-                    modpack_cache_path(
-                        root,
-                        components[0],
-                        components[1],
-                        components[2]
-                    )
-                    .is_err(),
-                    "{position}: {malicious:?}"
-                );
-            }
-        }
-    }
-}
-
 #[tracing::instrument]
+
 pub async fn generate_pack_from_file(
     path: PathBuf,
     instance_id: String,
@@ -619,25 +567,6 @@ pub async fn set_instance_information(
     pack_version_id: Option<&str>,
     dependencies: &HashMap<PackDependency, String>,
     _ignore_lock: bool,
-) -> crate::Result<()> {
-    set_instance_information_with_local_loader_versions(
-        instance_id,
-        description,
-        backup_name,
-        pack_version_id,
-        dependencies,
-        &HashMap::new(),
-    )
-    .await
-}
-
-pub(crate) async fn set_instance_information_with_local_loader_versions(
-    instance_id: String,
-    description: &CreatePackDescription,
-    backup_name: &str,
-    pack_version_id: Option<&str>,
-    dependencies: &HashMap<PackDependency, String>,
-    local_loader_versions: &HashMap<PackDependency, String>,
 ) -> crate::Result<()> {
     let mut game_version: Option<&String> = None;
     for (key, value) in dependencies {
@@ -691,7 +620,6 @@ pub(crate) async fn set_instance_information_with_local_loader_versions(
             *dependency,
             *loader,
             game_version,
-            local_loader_versions,
         )
         .await?;
         components[0].version = Some(version);
@@ -717,7 +645,6 @@ pub(crate) async fn set_instance_information_with_local_loader_versions(
                 dependency,
                 loader,
                 game_version,
-                local_loader_versions,
             )
             .await?;
             components.push(LoaderComponent {
@@ -819,11 +746,7 @@ async fn resolve_pack_loader_version(
     dependency: PackDependency,
     loader: ModLoader,
     game_version: &str,
-    local_loader_versions: &HashMap<PackDependency, String>,
 ) -> crate::Result<String> {
-    if let Some(version) = local_loader_versions.get(&dependency) {
-        return Ok(version.clone());
-    }
     let requested = dependencies
         .get(&dependency)
         .filter(|version| !version.trim().is_empty())

@@ -1,7 +1,5 @@
 //! Byte evidence is separate from project identity and search candidates.
 
-mod counterparts;
-
 use chrono::Utc;
 use futures::future::join_all;
 use tokio_util::sync::CancellationToken;

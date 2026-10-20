@@ -420,7 +420,7 @@ import {
 import { useQueryClient } from '@tanstack/vue-query'
 import { listen } from '@tauri-apps/api/event'
 import type { Ref } from 'vue'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 import axolotlLogo from '@/assets/axolotl.png'
@@ -449,11 +449,7 @@ import {
     users,
 } from '@/helpers/auth'
 import { process_listener } from '@/helpers/events'
-import { mojangAuthKeys } from '@/helpers/mojang-auth/monitor'
-import {
-    getPlayerHeadUrl,
-    retainPlayerHeadTextures,
-} from '@/helpers/rendering/batch-skin-renderer.ts'
+import { getPlayerHeadUrl } from '@/helpers/rendering/batch-skin-renderer.ts'
 import type { Skin } from '@/helpers/skins'
 import { get_available_skins } from '@/helpers/skins'
 import { handleSevereError, useError } from '@/store/error.js'
@@ -470,7 +466,7 @@ const refreshingNetwork = ref(false)
 /**
  * Re-checks session server reachability on demand so users can leave offline
  * mode without restarting the launcher. Goes through the shared
- * application-owned Mojang query so the reachability state and the auth
+ * `authServerReachability` query so the reachability state and the auth
  * warning banner stay consistent.
  */
 async function refreshNetworkStatus() {
@@ -479,10 +475,7 @@ async function refreshNetworkStatus() {
     try {
         refreshBrowserOffline()
         await nextTick()
-        await queryClient.refetchQueries(
-            { queryKey: mojangAuthKeys.status, exact: true },
-            { cancelRefetch: false },
-        )
+        await queryClient.refetchQueries({ queryKey: ['authServerReachability'] })
     } finally {
         refreshingNetwork.value = false
     }
@@ -630,25 +623,21 @@ function scheduleHeadRefreshRetry(generation: number, attempt: number) {
     }, delay)
 }
 
-async function refreshValues(
-    headRefreshAttempt = 0,
-    preferOnlineAccount = false,
-    cachedOnly = false,
-) {
+async function refreshValues(headRefreshAttempt = 0, preferOnlineAccount = false) {
     clearHeadRefreshRetry()
     const generation = ++refreshGeneration
-    const [selectedUser, userList] = await Promise.all([
-        get_default_user(offline.value).catch(handleError),
-        users(offline.value, true).catch(handleError),
-    ])
+    const selectedUser = await get_default_user(offline.value).catch(handleError)
+    if (generation !== refreshGeneration) return
+
+    const userList = await users(offline.value).catch(handleError)
     if (generation !== refreshGeneration) return
     // The Rust backend returns a plain array that structurally matches
     // MinecraftCredential but the TS types from the Tauri IPC bridge do not
     // carry this refinement. The double cast is deliberate — the shape is
     // correct and verified at runtime by the backend.
-    if (Array.isArray(userList)) {
-        accounts.value = [...(userList as unknown as MinecraftCredential[])]
-    }
+    accounts.value = Array.isArray(userList)
+        ? [...(userList as unknown as MinecraftCredential[])]
+        : []
     accounts.value.sort(compareMinecraftAccounts)
     let resolvedSelectedUser = selectedUser
     if (preferOnlineAccount && selectedUser) {
@@ -659,21 +648,7 @@ async function refreshValues(
         await persistDefaultUser(resolvedSelectedUser)
         if (generation !== refreshGeneration) return
     }
-    // Cached account metadata can resolve Suspense before any image download,
-    // token refresh or online profile/skin request finishes.
-    const localHeads = renderAccountHeads(accounts.value, generation)
-    if (cachedOnly) {
-        void localHeads.catch(console.warn)
-        return
-    }
-    const updatedUsers = await users(offline.value).catch(handleError)
-    if (generation !== refreshGeneration) return
-    if (Array.isArray(updatedUsers)) {
-        accounts.value = [...(updatedUsers as unknown as MinecraftCredential[])].sort(
-            compareMinecraftAccounts,
-        )
-    }
-    await Promise.all([localHeads, renderAccountHeads(accounts.value, generation)])
+    await renderAccountHeads(accounts.value, generation)
     if (generation !== refreshGeneration) return
     try {
         const skins = await get_available_skins()
@@ -741,32 +716,7 @@ defineExpose({
     loginDisabled,
 })
 
-watch(
-    () => [
-        ...accounts.value.map((account) => getAccountSkin(account)?.texture_key),
-        equippedSkin.value?.texture_key,
-    ],
-    (keys, _, onCleanup) => {
-        onCleanup(retainPlayerHeadTextures(keys.filter((key): key is string => !!key)))
-        const accountIds = new Set(accounts.value.map((account) => account.account_id))
-        accountHeadUrlCache.value = new Map(
-            [...accountHeadUrlCache.value].filter(([id]) => accountIds.has(id)),
-        )
-        accountHeadTextureKeyCache.value = new Map(
-            [...accountHeadTextureKeyCache.value].filter(([id]) => accountIds.has(id)),
-        )
-        headUrlCache.value = new Map(
-            [...headUrlCache.value].filter(([key]) => key === equippedSkin.value?.texture_key),
-        )
-    },
-    { immediate: true, flush: 'sync' },
-)
-
-onMounted(() => {
-    void refreshValues().catch(console.warn)
-})
-
-await refreshValues(0, false, true)
+await refreshValues()
 
 watch(offline, async (isOffline, wasOffline) => {
     await refreshValues(0, wasOffline === true && !isOffline)
@@ -832,10 +782,6 @@ async function renderAccountHeads(accountList: MinecraftCredential[], generation
             try {
                 const headUrl = await getPlayerHeadUrl(skin)
                 if (generation !== refreshGeneration) return
-                const currentSkin = getAccountSkin(
-                    accounts.value.find((current) => current.account_id === account.account_id),
-                )
-                if (currentSkin?.texture_key !== skin.texture_key) return
                 cacheAccountHead(account.account_id, skin, headUrl)
             } catch (error) {
                 console.warn(`Failed to render head for account ${account.account_id}:`, error)
@@ -1201,7 +1147,6 @@ const unlistenDeviceLogin = await listen('minecraft-device-login-requested', () 
 })
 
 onUnmounted(() => {
-    refreshGeneration += 1
     clearHeadRefreshRetry()
     unlisten()
     unlistenDeviceLogin()

@@ -1,5 +1,3 @@
-import '@/test/visual-styles.scss'
-
 import { mount } from '@vue/test-utils'
 import { expect, it, vi } from 'vitest'
 import { nextTick, reactive, ref } from 'vue'
@@ -11,23 +9,8 @@ import Downloads from './Downloads.vue'
 
 const fixture = vi.hoisted(() => ({
     manager: {} as unknown,
-    instances: [] as { id: string; name: string }[],
-    clipboard: vi.fn(),
     route: { query: {} as Record<string, unknown> },
 }))
-
-vi.mock('@tanstack/vue-query', async () => {
-    const { ref } = await import('vue')
-    return {
-        useQuery: () => ({ data: ref(fixture.instances) }),
-        useQueryClient: () => ({ invalidateQueries: vi.fn() }),
-    }
-})
-vi.mock('@/pages/instance/query-options', () => ({
-    instanceKeys: { list: () => ['instances', 'list'] },
-    instanceListQueryOptions: () => ({}),
-}))
-vi.mock('@/composables/use-app-event', () => ({ useAppEvent: () => {} }))
 
 // Keep the actual page and ProgressBar; isolate native APIs and unrelated controls.
 vi.mock('@/providers/download-manager', () => ({
@@ -61,47 +44,24 @@ vi.mock('@modrinth/ui', async () => {
                 'Admonition',
                 'Badge',
                 'BulletDivider',
+                'Button',
                 'Card',
                 'Combobox',
                 'ConfirmModal',
                 'EmptyState',
                 'NavTabs',
                 'StyledInput',
+                'Table',
                 'TagItem',
             ].map((name) => [name, control]),
         ),
         ProgressBar,
-        Button: (await import('../../../../packages/ui/src/components/base/buttons/Button.vue'))
-            .default,
-        Table: (await import('../../../../packages/ui/src/components/base/Table.vue')).default,
-        NewModal: defineComponent({
-            props: ['header'],
-            setup: (props, { expose, slots }) => {
-                const visible = ref(false)
-                expose({
-                    show: () => {
-                        visible.value = true
-                    },
-                })
-                return () =>
-                    visible.value
-                        ? h('section', { role: 'dialog' }, [props.header, slots.default?.()])
-                        : null
-            },
-        }),
-        commonMessages: { retryButton: { defaultMessage: 'Retry' } },
         defineMessages: (messages: unknown) => messages,
         defineMessage: (message: unknown) => message,
         injectNotificationManager: () => ({ handleError: vi.fn() }),
         useFormatBytes: () => (value: number) => String(value),
         useVIntl: () => ({
-            formatMessage: (
-                message: { defaultMessage: string },
-                values: Record<string, unknown> = {},
-            ) =>
-                message.defaultMessage.replace(/\{(\w+)\}/g, (_, key) =>
-                    String(values[key] ?? `{${key}}`),
-                ),
+            formatMessage: (message: { defaultMessage: string }) => message.defaultMessage,
         }),
     }
 })
@@ -134,13 +94,7 @@ function downloadingJob(provider: InstallJobSnapshot['provider']): InstallJobSna
 it('returning from history without a valid tab query displays active downloads', async () => {
     fixture.route = reactive({ query: { tab: 'history' } as Record<string, unknown> })
     const jobs = ref([downloadingJob('modrinth')])
-    fixture.manager = {
-        initializationState: ref('ready'),
-        jobs,
-        activeJobs: jobs,
-        historyJobs: ref([]),
-        legacyDownloads: ref([]),
-    }
+    fixture.manager = { jobs, activeJobs: jobs, historyJobs: ref([]), legacyDownloads: ref([]) }
     const wrapper = mount(Downloads, { global: { directives: { tooltip: () => {} } } })
     try {
         const tabs = () => wrapper.get('[data-onboarding-id="downloads-tabs"] > div')
@@ -160,13 +114,7 @@ it.each(['curse_forge', 'local'] as const)(
     '%s extraction clears the previous download percentage and accepts new phase progress',
     async (provider) => {
         const jobs = ref([downloadingJob(provider)])
-        fixture.manager = {
-            initializationState: ref('ready'),
-            jobs,
-            activeJobs: jobs,
-            historyJobs: ref([]),
-            legacyDownloads: ref([]),
-        }
+        fixture.manager = { jobs, activeJobs: jobs, historyJobs: ref([]), legacyDownloads: ref([]) }
         const wrapper = mount(Downloads, { global: { directives: { tooltip: () => {} } } })
         const bar = () => wrapper.get('[role=progressbar]')
         try {
@@ -202,77 +150,3 @@ it.each(['curse_forge', 'local'] as const)(
         }
     },
 )
-
-it('shows the target name in the task summary and keeps long errors and raw identifiers in file details', async () => {
-    fixture.instances = [{ id: 'internal-instance-id', name: 'My Minecraft world' }]
-    const error =
-        'Connection failed: ' +
-        'very-long-filename-'.repeat(25) +
-        ' permission denied at the destination'
-    const item = {
-        id: 'file-one',
-        name: 'example.jar',
-        manual_url: 'https://example.test/manual',
-        status: 'failed',
-        attempts: 2,
-        error,
-        source: 'official',
-        request_url: 'https://files.example.test/' + 'path/'.repeat(30) + 'example.jar',
-        project_id: 'internal-project',
-        version_id: 'internal-version',
-        bytes_downloaded: 1,
-        bytes_total: 10,
-    }
-    const job = {
-        ...downloadingJob('modrinth'),
-        instance_id: 'internal-instance-id',
-        items: [item],
-    } as InstallJobSnapshot
-    const jobs = ref([job])
-    fixture.manager = {
-        initializationState: ref('ready'),
-        jobs,
-        activeJobs: jobs,
-        historyJobs: ref([]),
-        legacyDownloads: ref([]),
-    }
-    Object.defineProperty(navigator, 'clipboard', {
-        configurable: true,
-        value: { writeText: fixture.clipboard.mockResolvedValue(undefined) },
-    })
-    const wrapper = mount(Downloads, {
-        attachTo: document.body,
-        global: { directives: { tooltip: () => {} } },
-    })
-    try {
-        const card = wrapper.get('[data-install-job-id]')
-        expect(card.text()).toContain('My Minecraft world')
-        expect(card.text()).not.toContain('internal-instance-id')
-        expect(card.text()).not.toContain('https://files.example.test')
-        await card
-            .findAll('button')
-            .find((button) => button.text() === 'Details')!
-            .trigger('click')
-        expect(card.text()).toContain('internal-instance-id')
-        expect(card.find('table').text()).not.toContain(error)
-        expect(card.get('tbody tr').element.getBoundingClientRect().height).toBeLessThanOrEqual(56)
-        await card.get('[aria-label="View details for example.jar"]').trigger('click')
-        const dialog = wrapper.get('[role="dialog"]')
-        expect(dialog.text()).toContain(error)
-        expect(dialog.text()).toContain(item.request_url)
-        expect(dialog.text()).toContain('internal-project')
-        expect(dialog.text()).toContain('internal-version')
-        expect(dialog.get('p').classes()).not.toContain('truncate')
-        await dialog
-            .findAll('button')
-            .find((button) => button.text() === 'Copy file details')!
-            .trigger('click')
-        expect(fixture.clipboard).toHaveBeenCalledWith(expect.stringContaining(error))
-        jobs.value = [{ ...job, items: [{ ...item, error: 'Updated error' }] }]
-        await nextTick()
-        expect(dialog.text()).toContain('Updated error')
-    } finally {
-        wrapper.unmount()
-        fixture.instances = []
-    }
-})

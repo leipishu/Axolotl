@@ -9857,7 +9857,7 @@ impl From<CurseForgeProject> for UnifiedSearchHit {
     }
 }
 
-pub(crate) fn api_key() -> Option<String> {
+fn api_key() -> Option<String> {
     std::env::var("AXOLOTL_CURSEFORGE_API_KEY")
         .ok()
         .or_else(|| option_env!("CURSEFORGE_API_KEY").map(str::to_string))

@@ -1,9 +1,10 @@
-use super::{io, java_environment};
+use super::io;
 use crate::state::JavaVersion;
 use futures::prelude::*;
 use std::collections::VecDeque;
 use std::env;
 use std::path::PathBuf;
+use std::process::Command;
 use std::{collections::HashSet, path::Path};
 use tokio::task::JoinError;
 
@@ -777,10 +778,11 @@ pub async fn check_java_at_filepath(path: &Path) -> crate::Result<JavaVersion> {
     let (_temp, file_path) =
         get_resource_file!(env "JAVA_JARS_DIR" / "theseus.jar")?;
 
-    let output = java_environment::command(&java)
+    let output = Command::new(&java)
         .arg("-cp")
         .arg(file_path)
         .arg("com.modrinth.theseus.JavaInfo")
+        .env_remove("_JAVA_OPTIONS")
         .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);

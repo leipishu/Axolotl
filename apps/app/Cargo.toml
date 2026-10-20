@@ -1,7 +1,7 @@
 [package]
 name = "theseus_gui"
 # The actual version is set by the theseus-build workflow on tagging
-version = "1.10.0-beta.3"
+version = "1.10.0-beta.1"
 edition.workspace = true
 description = "Axolotl Launcher is a cross-platform Minecraft launcher"
 homepage = "https://www.ghs.red"
@@ -90,7 +90,6 @@ objc2-foundation = { version = "0.3.2", default-features = false, features = [
 ] }
 
 [target."cfg(windows)".dependencies]
-libloading = { workspace = true }
 windows-version = "0.1.7"
 
 [target."cfg(windows)".dependencies.windows]

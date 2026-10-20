@@ -18,7 +18,6 @@ import {
     useRelativeTime,
     useVIntl,
 } from '@modrinth/ui'
-import { useQuery } from '@tanstack/vue-query'
 import dayjs from 'dayjs'
 import { computed, onUnmounted, ref, watch } from 'vue'
 
@@ -89,13 +88,7 @@ const messages = defineMessages({
 const selectedInstance = computed(() =>
     props.instances.find((instance) => instance.id === props.selectedInstanceId),
 )
-const processQuery = useQuery({
-    queryKey: computed(() => ['home', 'instance-processes', selectedInstance.value?.id]),
-    queryFn: () => get_by_instance_id(selectedInstance.value!.id),
-    enabled: computed(() => !!selectedInstance.value),
-    refetchOnWindowFocus: true,
-})
-const running = computed(() => (processQuery.data.value?.length ?? 0) > 0)
+const running = ref(false)
 const loading = ref(false)
 const currentEvent = ref<string | null>(null)
 const installed = computed(() => selectedInstance.value?.install_stage === 'installed')
@@ -104,10 +97,7 @@ const installing = computed(
 )
 const busy = computed(
     () =>
-        loading.value ||
-        installing.value ||
-        processQuery.isFetching.value ||
-        (currentEvent.value === 'launched' && !running.value),
+        loading.value || installing.value || (currentEvent.value === 'launched' && !running.value),
 )
 
 const lastPlayed = computed(() => {
@@ -118,7 +108,16 @@ const lastPlayed = computed(() => {
 })
 
 async function refreshProcessState() {
-    if (selectedInstance.value) await processQuery.refetch()
+    if (!selectedInstance.value) {
+        running.value = false
+        return
+    }
+
+    const processes = await get_by_instance_id(selectedInstance.value.id).catch((error) => {
+        handleError(error)
+        return []
+    })
+    running.value = processes.length > 0
 }
 
 async function playInstance() {
@@ -150,7 +149,7 @@ async function stopInstance() {
     if (!instance) return
 
     await kill(instance.id).catch(handleError)
-    await refreshProcessState()
+    running.value = false
     trackEvent('InstanceStop', {
         loader: instance.loader,
         game_version: instance.game_version,
@@ -189,25 +188,21 @@ watch(
     () => props.selectedInstanceId,
     () => {
         currentEvent.value = null
+        void refreshProcessState()
     },
 )
 
-let disposed = false
-let unlistenProcess: (() => void) | undefined
-void process_listener((event: { instance_id: string; event: string }) => {
-    if (disposed || event.instance_id !== selectedInstance.value?.id) return
+await refreshProcessState()
+
+const unlistenProcess = await process_listener((event: { instance_id: string; event: string }) => {
+    if (event.instance_id !== selectedInstance.value?.id) return
     currentEvent.value = event.event
-    void refreshProcessState()
+    if (event.event === 'finished') running.value = false
+    else void refreshProcessState()
 })
-    .then((unlisten) => {
-        if (disposed) unlisten()
-        else unlistenProcess = unlisten
-    })
-    .catch(handleError)
 
 onUnmounted(() => {
-    disposed = true
-    unlistenProcess?.()
+    unlistenProcess()
 })
 </script>
 
@@ -260,14 +255,7 @@ onUnmounted(() => {
 
                         <div class="flex min-h-11 shrink-0 items-center justify-end gap-2">
                             <Button
-                                v-if="processQuery.isError.value && !running"
-                                size="xl"
-                                class="w-36 justify-center"
-                                @click="refreshProcessState()"
-                                >{{ formatMessage(commonMessages.retryButton) }}</Button
-                            >
-                            <Button
-                                v-else-if="running"
+                                v-if="running"
                                 type="colored"
                                 color="red"
                                 size="xl"

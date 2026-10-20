@@ -1,17 +1,10 @@
-import {
-    buildLocaleMessages,
-    createMessageCompiler,
-    type CrowdinMessages,
-    uiEnglishMessages,
-    uiLocaleModules,
-} from '@modrinth/ui'
+import { buildLocaleMessages, createMessageCompiler, type CrowdinMessages } from '@modrinth/ui'
+import { uiLocaleModulesEager } from '@modrinth/ui/locales.eager'
 import { createI18n } from 'vue-i18n'
 
-import { createLocaleLoader } from '@/helpers/locale-loader'
-import englishAppMessages from '@/locales/en-US/index.json'
-
-const localeModules = import.meta.glob<{ default: CrowdinMessages }>('./locales/*/index.json')
-const availableLocales = Object.keys(localeModules).map((path) => path.split('/').at(-2)!)
+const localeModules = import.meta.glob<{ default: CrowdinMessages }>('./locales/*/index.json', {
+    eager: true,
+})
 
 const i18n = createI18n({
     legacy: false,
@@ -20,50 +13,15 @@ const i18n = createI18n({
     messageCompiler: createMessageCompiler(),
     missingWarn: false,
     fallbackWarn: false,
-    messages: buildLocaleMessages(
-        { './locales/en-US/index.json': { default: englishAppMessages } },
-        { './locales/en-US/index.json': { default: uiEnglishMessages } },
-    ),
+    messages: buildLocaleMessages(localeModules, uiLocaleModulesEager),
 })
 
-const localeLoader = createLocaleLoader(
-    async (locale) => {
-        const appPath = `./locales/${locale}/index.json`
-        const [appMessages, uiMessages] = await Promise.all([
-            localeModules[appPath](),
-            uiLocaleModules[appPath](),
-        ])
-        i18n.global.setLocaleMessage(
-            locale,
-            buildLocaleMessages({ [appPath]: appMessages }, { [appPath]: uiMessages })[locale],
-        )
-    },
-    (locale) => {
-        i18n.global.locale.value = locale
-    },
-    ['en-US'],
-)
-
-export async function setAppLocale(locale: string): Promise<void> {
-    await localeLoader.select(availableLocales.includes(locale) ? locale : 'en-US')
-}
-
-const STARTUP_LOCALE_KEY = 'axolotl.startup-locale'
-
-export async function initializeLocale(): Promise<void> {
-    let storedLocale: string | null = null
-    try {
-        storedLocale = localStorage.getItem(STARTUP_LOCALE_KEY)
-    } catch {
-        // The database preference remains authoritative when storage is unavailable.
-    }
-    await applyLocalePreference(storedLocale)
-}
-
 export function resolveInitialLocale(preferredLocales: readonly string[]): string {
+    const availableLocales = new Set(i18n.global.availableLocales)
+
     for (const preferredLocale of preferredLocales) {
         const normalizedLocale = preferredLocale.replace('_', '-')
-        if (availableLocales.includes(normalizedLocale)) return normalizedLocale
+        if (availableLocales.has(normalizedLocale)) return normalizedLocale
 
         const language = normalizedLocale.split('-')[0].toLowerCase()
         if (language === 'zh') {
@@ -71,7 +29,7 @@ export function resolveInitialLocale(preferredLocales: readonly string[]): strin
             return traditionalChinese ? 'zh-TW' : 'zh-CN'
         }
 
-        const languageMatch = availableLocales.find((locale) =>
+        const languageMatch = i18n.global.availableLocales.find((locale) =>
             locale.toLowerCase().startsWith(`${language}-`),
         )
         if (languageMatch) return languageMatch
@@ -110,23 +68,23 @@ export function setFollowSystemLocale(follow: boolean) {
 }
 
 /** Applies the stored locale preference and returns the concrete locale used. */
-export async function applyLocalePreference(
-    storedLocale: string | null | undefined,
-): Promise<string> {
-    const locale = isFollowingSystemLocale(storedLocale)
-        ? getSystemResolvedLocale()
-        : availableLocales.includes(storedLocale ?? '')
-          ? storedLocale!
-          : 'en-US'
-    try {
-        localStorage.setItem(STARTUP_LOCALE_KEY, storedLocale ?? SYSTEM_LOCALE_VALUE)
-    } catch {
-        // Caching the preference only avoids loading an unused system dictionary next time.
+export function applyLocalePreference(storedLocale: string | null | undefined): string {
+    if (isFollowingSystemLocale(storedLocale)) {
+        const resolved = getSystemResolvedLocale()
+        i18n.global.locale.value = resolved
+        return resolved
     }
-    await setAppLocale(locale)
+
+    const locale = storedLocale && storedLocale !== SYSTEM_LOCALE_VALUE ? storedLocale : 'en-US'
+    i18n.global.locale.value = locale
     return locale
 }
 
-// English is available for the first synchronous render. Other dictionaries load
-// alongside backend initialization; setupApp applies the authoritative DB preference.
+// The locale the user picked lives in the app database, which is exactly what is
+// unreadable when startup fails - and a startup failure is when the remaining
+// dialogs matter most. Starting from the system language keeps them in a
+// language the user reads; `setupApp` still applies the saved locale once the
+// database is available.
+i18n.global.locale.value = getSystemResolvedLocale()
+
 export default i18n

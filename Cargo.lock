@@ -6953,7 +6953,7 @@ dependencies = [
 
 [[package]]
 name = "theseus"
-version = "1.10.0-beta.3"
+version = "1.10.0-beta.1"
 dependencies = [
  "ariadne",
  "async-minecraft-ping",
@@ -7022,7 +7022,6 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pki-types",
- "semver",
  "serde",
  "serde_cbor",
  "serde_ini",
@@ -7063,7 +7062,7 @@ dependencies = [
 
 [[package]]
 name = "theseus_gui"
-version = "1.10.0-beta.3"
+version = "1.10.0-beta.1"
 dependencies = [
  "ashpd",
  "async_zip",
@@ -7083,7 +7082,6 @@ dependencies = [
  "image",
  "keyring",
  "libc",
- "libloading",
  "native-dialog",
  "notify",
  "objc2-app-kit",

@@ -14,7 +14,7 @@ export const TEXTURE_ATLAS: TextureAtlas = {
 
 export const TEXTURE_ATLAS_SIZE = {
     width: 2_048,
-    height: 1440,
+    height: 1_312,
 } as const
 
 export type TextureManifestItem = {

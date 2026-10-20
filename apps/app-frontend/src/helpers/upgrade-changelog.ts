@@ -1,10 +1,4 @@
-import { LRUCache } from 'lru-cache'
-
-const translationCache = new LRUCache<string, string>({
-    max: 200,
-    maxSize: 4 * 1024 * 1024,
-    sizeCalculation: (value, key) => Math.max(1, (value.length + key.length) * 2),
-})
+const translationCache = new Map<string, string>()
 
 export interface UpgradeChangelogPopoverOwnership {
     triggerHovered: boolean

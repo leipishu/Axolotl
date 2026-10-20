@@ -6,7 +6,6 @@ import {
     FileTextIcon,
     GameIcon,
     GaugeIcon,
-    GlobeIcon,
     InfoIcon,
     KeyboardIcon,
     LanguagesIcon,
@@ -75,10 +74,6 @@ const categoryContent: Record<SettingsCategoryId, Pick<SettingsCategory, 'icon' 
     'content-downloads': {
         icon: GaugeIcon,
         content: defineAsyncComponent(() => import('./ContentDownloadSettings.vue')),
-    },
-    'network-connection': {
-        icon: GlobeIcon,
-        content: defineAsyncComponent(() => import('./NetworkConnectionSettings.vue')),
     },
     'network-multiplayer': {
         icon: UsersIcon,

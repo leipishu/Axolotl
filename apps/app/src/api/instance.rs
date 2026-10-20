@@ -2,7 +2,6 @@ use crate::api::Result;
 use crate::api::files::local_instance_icon_path;
 use chrono::NaiveDate;
 use dashmap::DashMap;
-use futures::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, Runtime};
@@ -62,7 +61,6 @@ pub fn init<R: tauri::Runtime>() -> tauri::plugin::TauriPlugin<R> {
             instance_apply_content_update_plan,
             instance_plan_upgrade,
             instance_get_upgrade_plan,
-            instance_discard_upgrade_plan,
             instance_update_upgrade_resolution,
             instance_update_upgrade_resolutions,
             instance_reset_upgrade_resolution,
@@ -969,21 +967,20 @@ pub async fn instance_get_many(
     instance_ids: Vec<String>,
 ) -> Result<Vec<Instance>> {
     let ids = instance_ids.iter().map(|x| &**x).collect::<Vec<&str>>();
-    instances_from_metadata(theseus::instance::get_many(&ids).await?).await
+    let mut instances = Vec::with_capacity(ids.len());
+    for metadata in theseus::instance::get_many(&ids).await? {
+        instances.push(instance_from_metadata(metadata).await?);
+    }
+    Ok(instances)
 }
 
 #[tauri::command]
 pub async fn instance_list() -> Result<Vec<Instance>> {
-    instances_from_metadata(theseus::instance::list().await?).await
-}
-
-async fn instances_from_metadata(
-    metadata: Vec<InstanceMetadata>,
-) -> Result<Vec<Instance>> {
-    futures::stream::iter(metadata.into_iter().map(instance_from_metadata))
-        .buffered(4)
-        .try_collect()
-        .await
+    let mut instances = Vec::new();
+    for metadata in theseus::instance::list().await? {
+        instances.push(instance_from_metadata(metadata).await?);
+    }
+    Ok(instances)
 }
 
 #[tauri::command]
@@ -1145,12 +1142,6 @@ pub async fn instance_plan_upgrade(
         target_environment,
     )
     .await?)
-}
-
-#[tauri::command]
-pub async fn instance_discard_upgrade_plan(plan_id: &str) -> Result<()> {
-    theseus::instance::discard_instance_upgrade_plan(plan_id);
-    Ok(())
 }
 
 #[tauri::command]

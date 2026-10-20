@@ -16,7 +16,6 @@ export function useResultCountWheel(options: {
     getValue: () => SlotValue | undefined
     getCount: () => number
     setCount: (count: number) => void
-    getMaximum?: () => number
 }) {
     const { formatMessage } = useVIntl()
     const canAdjust = computed(() =>
@@ -34,7 +33,7 @@ export function useResultCountWheel(options: {
         event.preventDefault()
         event.stopPropagation()
         const current = options.getCount()
-        const next = nextResultCount(current, event.deltaY, options.getMaximum?.())
+        const next = nextResultCount(current, event.deltaY)
         if (next !== current) options.setCount(next)
     }
 

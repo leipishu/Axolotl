@@ -65,11 +65,6 @@ const errorMessages = defineMessages({
         defaultMessage:
             'These search filters could not be applied. Reset the filters and try again.',
     },
-    incompleteVersions: {
-        id: 'app.resources.error.incomplete-versions',
-        defaultMessage:
-            'The source could not return all versions. Open the project’s Versions tab and choose a file.',
-    },
     unsupported: {
         id: 'app.resources.error.unsupported',
         defaultMessage: 'This content source does not support the requested operation or filters.',
@@ -88,7 +83,7 @@ export function isResourceOperationError(error: unknown): boolean {
             error !== null &&
             'code' in error &&
             ['resourceError', 'cursorExpired'].includes(String(error.code))) ||
-        /^(resource (cursor|source|request|cache|database)|unsupported resource operation|invalid (resource request|source response)|Source presentation is unavailable|Source release window is incomplete|Source returned an invalid release cursor|.*search filter|Invalid search page)/i.test(
+        /^(resource (cursor|source|request|cache|database)|unsupported resource operation|invalid (resource request|source response)|Source presentation is unavailable|.*search filter|Invalid search page)/i.test(
             rawMessage(error),
         )
     )
@@ -105,10 +100,6 @@ export function resourceOperationError(error: unknown, formatMessage?: FormatMes
         /resource cursor expired|release cursor repeated/i.test(message)
     )
         return formatMessage(errorMessages.cursorExpired)
-    if (/Source release window is incomplete/i.test(message))
-        return formatMessage(errorMessages.incompleteVersions)
-    if (/Source returned an invalid release cursor/i.test(message))
-        return formatMessage(errorMessages.sourceResponse)
     if (/search filter|Invalid search page/i.test(message))
         return formatMessage(errorMessages.invalidSearch)
     if (/unsupported resource operation/i.test(message))

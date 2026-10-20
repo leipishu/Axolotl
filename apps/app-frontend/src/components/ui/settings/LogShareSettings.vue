@@ -1,16 +1,7 @@
 <script setup lang="ts">
-import {
-    Button,
-    Combobox,
-    defineMessages,
-    injectNotificationManager,
-    Toggle,
-    useVIntl,
-} from '@modrinth/ui'
-import { computed, inject, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
+import { Combobox, defineMessages, injectNotificationManager, Toggle, useVIntl } from '@modrinth/ui'
+import { computed, onMounted, ref } from 'vue'
 
-import LogAgentSourcePicker from '@/components/ui/LogAgentSourcePicker.vue'
 import { type AIState, getAIState, sharedAIState } from '@/helpers/ai'
 import {
     get_crash_analysis_ai_settings,
@@ -18,13 +9,16 @@ import {
     update_crash_analysis_ai_settings,
     update_log_share_settings,
 } from '@/helpers/logs'
-import type { AnalysisSettings } from '@/logagent/types'
 
 import SettingsRow from './SettingsRow.vue'
 import SettingsSection from './SettingsSection.vue'
 
-const props = defineProps<{ localSetup?: boolean }>()
-const emit = defineEmits<{ openProviders: []; savingChange: [saving: boolean] }>()
+type CrashAISettings = {
+    enabled: boolean
+    provider_id: string
+    model_id: string
+    ai_source: 'logshare' | 'custom'
+}
 
 type LogShareSettings = {
     share_provider: 'logshare' | 'mclogs'
@@ -36,8 +30,6 @@ type LogShareSettings = {
 }
 
 const { formatMessage } = useVIntl()
-const router = useRouter()
-const replayOnboarding = inject<(mode: 'logagent') => Promise<void>>('replayOnboarding')
 const { handleError } = injectNotificationManager()
 const settings = ref<LogShareSettings>({
     share_provider: 'logshare',
@@ -47,7 +39,7 @@ const settings = ref<LogShareSettings>({
     no_storage: false,
     show_progress: true,
 })
-const aiSettings = ref<AnalysisSettings>({
+const aiSettings = ref<CrashAISettings>({
     enabled: false,
     provider_id: '',
     model_id: '',
@@ -57,47 +49,37 @@ const loading = ref(true)
 const saving = ref(false)
 
 const messages = defineMessages({
-    localSetupTitle: {
-        id: 'app.logagent.settings.local-setup-title',
-        defaultMessage: 'Local LogAgent',
-    },
-    localSetupDescription: {
-        id: 'app.logagent.settings.local-setup-description',
+    title: { id: 'app.log-share.settings.title', defaultMessage: 'Log sharing & AI analysis' },
+    description: {
+        id: 'app.log-share.settings.description',
         defaultMessage:
-            'Configure your model for local analysis. Your default analysis source stays the same.',
-    },
-    analysisTitle: { id: 'app.logagent.settings.analysis-title', defaultMessage: 'Crash analysis' },
-    analysisDescription: {
-        id: 'app.logagent.settings.analysis-description',
-        defaultMessage: 'Choose the default. You can change it for an individual analysis.',
-    },
-    sharingTitle: {
-        id: 'app.logagent.settings.sharing-title',
-        defaultMessage: 'Diagnostic sharing',
-    },
-    sharingDescription: {
-        id: 'app.logagent.settings.sharing-description',
-        defaultMessage: 'Used when you choose to share a diagnostic link.',
-    },
-    displayTitle: { id: 'app.logagent.settings.display-title', defaultMessage: 'Analysis display' },
-    modelHelp: { id: 'app.logagent.settings.model-help', defaultMessage: 'Model requirements' },
-    manageModels: {
-        id: 'app.logagent.settings.manage-models',
-        defaultMessage: 'Configure AI providers',
-    },
-    tour: { id: 'app.logagent.settings.tour', defaultMessage: 'About analysis sources' },
-    supportedModels: {
-        id: 'app.logagent.settings.supported-models',
-        defaultMessage:
-            'Choose a model that supports tool calling. Protocol support does not guarantee that every model accepts tools. Copilot Auto requires selecting an explicit model.',
+            'Share crash diagnostics with LogShare for a structured summary and optional AI analysis. LogShare is preferred; mclo.gs is used as a fallback.',
     },
     shareProvider: {
         id: 'app.log-share.settings.share-provider',
         defaultMessage: 'Log sharing service',
     },
+    shareProviderDescription: {
+        id: 'app.log-share.settings.share-provider-description',
+        defaultMessage: 'Where the diagnostic link is uploaded when you share it.',
+    },
+    aiSource: { id: 'app.log-share.settings.ai-source', defaultMessage: 'AI analysis source' },
+    aiSourceLogShare: {
+        id: 'app.log-share.settings.ai-source-logshare',
+        defaultMessage: 'LogShare AI',
+    },
+    aiSourceCustom: {
+        id: 'app.log-share.settings.ai-source-custom',
+        defaultMessage: 'Custom AI provider',
+    },
+    aiSourceDescription: {
+        id: 'app.log-share.settings.ai-source-description',
+        defaultMessage:
+            'Both sources send a sanitized and shortened crash context. AI output may be inaccurate.',
+    },
     enabled: {
         id: 'app.crash-analysis.ai.settings.enabled',
-        defaultMessage: 'Enable local LogAgent',
+        defaultMessage: 'Enable AI explanations',
     },
     enabledDescription: {
         id: 'app.crash-analysis.ai.settings.enabled-description',
@@ -108,7 +90,7 @@ const messages = defineMessages({
     noProviders: {
         id: 'app.crash-analysis.ai.settings.no-providers',
         defaultMessage:
-            'Enable an AI provider and a tool-capable model in Settings > AI before configuring local LogAgent.',
+            'Enable a provider and a text model above before using AI crash explanations.',
     },
     autoUpload: {
         id: 'app.log-share.settings.auto-upload',
@@ -116,7 +98,7 @@ const messages = defineMessages({
     },
     autoUploadDescription: {
         id: 'app.log-share.settings.auto-upload-description',
-        defaultMessage: 'Uploads logs to LogShare after a crash, before you start AI analysis.',
+        defaultMessage: 'Only effective in LogShare AI mode.',
     },
     multiFile: { id: 'app.log-share.settings.multi-file', defaultMessage: 'Multi-file upload' },
     multiFileDescription: {
@@ -138,8 +120,7 @@ const messages = defineMessages({
     },
     showProgressDescription: {
         id: 'app.log-share.settings.show-progress-description',
-        defaultMessage:
-            'Show readable investigation steps and keep their history after analysis. Diagnostic text appears as it is generated when the provider supports streaming.',
+        defaultMessage: 'Display thinking, tool and limit status while LogShare AI is working.',
     },
 })
 
@@ -165,16 +146,19 @@ const modelOptions = computed(
 )
 
 const isCustom = computed(() => aiSettings.value.ai_source === 'custom')
+const noStorageEnabled = computed(() => aiSettings.value.ai_source === 'logshare')
 
 const shareProviderOptions = [
     { value: 'logshare', label: 'LogShare' },
     { value: 'mclogs', label: 'mclo.gs' },
 ]
+const aiSourceOptions = [
+    { value: 'logshare', label: formatMessage(messages.aiSourceLogShare) },
+    { value: 'custom', label: formatMessage(messages.aiSourceCustom) },
+]
 
 async function saveShare(next: LogShareSettings): Promise<void> {
-    if (saving.value) return
     saving.value = true
-    emit('savingChange', true)
     try {
         await update_log_share_settings(next)
         settings.value = next
@@ -182,14 +166,11 @@ async function saveShare(next: LogShareSettings): Promise<void> {
         handleError(error)
     } finally {
         saving.value = false
-        emit('savingChange', false)
     }
 }
 
-async function saveAI(next: AnalysisSettings): Promise<void> {
-    if (saving.value) return
+async function saveAI(next: CrashAISettings): Promise<void> {
     saving.value = true
-    emit('savingChange', true)
     try {
         await update_crash_analysis_ai_settings(next)
         aiSettings.value = next
@@ -198,7 +179,6 @@ async function saveAI(next: AnalysisSettings): Promise<void> {
         handleError(error)
     } finally {
         saving.value = false
-        emit('savingChange', false)
     }
 }
 
@@ -213,7 +193,6 @@ function selectShareProvider(value: unknown): void {
 
 function selectAiSource(value: unknown): void {
     const source = value === 'custom' ? 'custom' : 'logshare'
-    if (source === aiSettings.value.ai_source) return
     void saveAI({ ...aiSettings.value, ai_source: source })
 }
 
@@ -231,17 +210,12 @@ function updateModel(modelId: string): void {
     void saveAI({ ...aiSettings.value, model_id: modelId })
 }
 
-function openProviders(): void {
-    if (props.localSetup) emit('openProviders')
-    else void router.push('/settings#ai')
-}
-
 onMounted(async () => {
     try {
         const [nextShare, nextAI] = await Promise.all([
             get_log_share_settings(),
             get_crash_analysis_ai_settings(),
-            getAIState().catch(handleError),
+            getAIState(),
         ])
         settings.value = { ...nextShare, ai_source: nextAI.ai_source }
         aiSettings.value = nextAI
@@ -254,162 +228,128 @@ onMounted(async () => {
 </script>
 
 <template>
-    <div v-if="!loading" class="flex min-w-0 flex-col gap-6">
-        <SettingsSection
-            :title="formatMessage(localSetup ? messages.localSetupTitle : messages.analysisTitle)"
-            :description="
-                formatMessage(
-                    localSetup ? messages.localSetupDescription : messages.analysisDescription,
-                )
-            "
-        >
-            <template #extra
-                ><Button v-if="!localSetup" type="quiet" @click="replayOnboarding?.('logagent')">{{
-                    formatMessage(messages.tour)
-                }}</Button></template
-            >
-            <div
-                v-if="!localSetup"
-                id="settings-target-log-share"
-                data-onboarding-id="logagent-settings-source"
-                class="p-4"
-            >
-                <LogAgentSourcePicker
-                    :model-value="aiSettings.ai_source"
+    <SettingsSection
+        v-if="!loading"
+        id="settings-target-log-share"
+        :title="formatMessage(messages.title)"
+        :description="formatMessage(messages.description)"
+    >
+        <SettingsRow>
+            <template #label>{{ formatMessage(messages.shareProvider) }}</template>
+            <template #description>{{ formatMessage(messages.shareProviderDescription) }}</template>
+            <template #control>
+                <Combobox
+                    id="log-share-provider"
+                    :model-value="settings.share_provider"
+                    :options="shareProviderOptions"
                     :disabled="saving"
-                    @update:model-value="selectAiSource"
+                    @update:model-value="selectShareProvider($event)"
                 />
-            </div>
-            <template v-if="isCustom || localSetup">
-                <SettingsRow inline-control>
-                    <template #label>{{ formatMessage(messages.enabled) }}</template>
-                    <template #description>{{
-                        formatMessage(messages.enabledDescription)
-                    }}</template>
-                    <template #control
-                        ><Toggle
-                            id="crash-analysis-ai-enabled"
-                            :model-value="aiSettings.enabled"
-                            :disabled="saving || !aiState.settings.enabled || !providers.length"
-                            @update:model-value="updateEnabled(!!$event)"
-                    /></template>
-                </SettingsRow>
-                <template v-if="providers.length">
-                    <SettingsRow>
-                        <template #label>{{ formatMessage(messages.provider) }}</template>
-                        <template #control
-                            ><Combobox
-                                id="crash-analysis-ai-provider"
-                                :model-value="aiSettings.provider_id"
-                                :options="providerOptions"
-                                :disabled="saving"
-                                @update:model-value="updateProvider(String($event))"
-                        /></template>
-                    </SettingsRow>
-                    <SettingsRow>
-                        <template #label>{{ formatMessage(messages.model) }}</template>
-                        <template #control
-                            ><Combobox
-                                id="crash-analysis-ai-model"
-                                :model-value="aiSettings.model_id"
-                                :options="modelOptions"
-                                :disabled="saving || !aiSettings.provider_id"
-                                @update:model-value="updateModel(String($event))"
-                        /></template>
-                    </SettingsRow>
-                    <details class="px-4 py-3 text-sm text-[var(--color-text-tertiary)]">
-                        <summary class="cursor-pointer">
-                            {{ formatMessage(messages.modelHelp) }}
-                        </summary>
-                        <p class="m-0 mt-2 leading-relaxed">
-                            {{ formatMessage(messages.supportedModels) }}
-                        </p>
-                    </details>
-                </template>
-                <div
-                    v-if="!providers.length || !aiState.settings.enabled"
-                    class="flex flex-col items-start gap-2 px-4 py-3"
-                >
-                    <p class="m-0 text-sm text-[var(--color-text-tertiary)]">
-                        {{ formatMessage(messages.noProviders) }}
-                    </p>
-                    <Button type="outlined" @click="openProviders">{{
-                        formatMessage(messages.manageModels)
-                    }}</Button>
-                </div>
             </template>
-            <div v-else data-onboarding-id="logagent-settings-cloud">
-                <SettingsRow inline-control>
-                    <template #label>{{ formatMessage(messages.noStorage) }}</template>
-                    <template #description>{{
-                        formatMessage(messages.noStorageDescription)
-                    }}</template>
-                    <template #control
-                        ><Toggle
-                            id="log-share-no-storage"
-                            :model-value="settings.no_storage"
-                            :disabled="saving"
-                            @update:model-value="updateShare({ no_storage: !!$event })"
-                    /></template>
-                </SettingsRow>
-                <SettingsRow inline-control>
-                    <template #label>{{ formatMessage(messages.autoUpload) }}</template>
-                    <template #description>{{
-                        formatMessage(messages.autoUploadDescription)
-                    }}</template>
-                    <template #control
-                        ><Toggle
-                            id="log-share-auto-upload"
-                            :model-value="settings.auto_upload"
-                            :disabled="saving || settings.no_storage"
-                            @update:model-value="updateShare({ auto_upload: !!$event })"
-                    /></template>
-                </SettingsRow>
-            </div>
-        </SettingsSection>
-        <SettingsSection
-            v-if="!localSetup"
-            data-onboarding-id="logagent-settings-sharing"
-            :title="formatMessage(messages.sharingTitle)"
-            :description="formatMessage(messages.sharingDescription)"
-        >
+        </SettingsRow>
+        <SettingsRow>
+            <template #label>{{ formatMessage(messages.aiSource) }}</template>
+            <template #description>{{ formatMessage(messages.aiSourceDescription) }}</template>
+            <template #control>
+                <Combobox
+                    id="log-share-ai-source"
+                    :model-value="aiSettings.ai_source"
+                    :options="aiSourceOptions"
+                    :disabled="saving"
+                    @update:model-value="selectAiSource($event)"
+                />
+            </template>
+        </SettingsRow>
+        <template v-if="isCustom">
             <SettingsRow>
-                <template #label>{{ formatMessage(messages.shareProvider) }}</template>
-                <template #control
-                    ><Combobox
-                        id="log-share-provider"
-                        :model-value="settings.share_provider"
-                        :options="shareProviderOptions"
-                        :disabled="saving"
-                        @update:model-value="selectShareProvider"
-                /></template>
+                <template #label>{{ formatMessage(messages.enabled) }}</template>
+                <template #description>{{ formatMessage(messages.enabledDescription) }}</template>
+                <template #control>
+                    <Toggle
+                        id="crash-analysis-ai-enabled"
+                        :model-value="aiSettings.enabled"
+                        :disabled="saving || !aiState.settings.enabled || !providers.length"
+                        @update:model-value="updateEnabled(!!$event)"
+                    />
+                </template>
             </SettingsRow>
-            <SettingsRow inline-control>
-                <template #label>{{ formatMessage(messages.multiFile) }}</template>
-                <template #description>{{ formatMessage(messages.multiFileDescription) }}</template>
-                <template #control
-                    ><Toggle
-                        id="log-share-multi-file"
-                        :model-value="settings.multi_file"
-                        :disabled="saving"
-                        @update:model-value="updateShare({ multi_file: !!$event })"
-                /></template>
-            </SettingsRow>
-        </SettingsSection>
-        <SettingsSection v-if="!localSetup" :title="formatMessage(messages.displayTitle)">
-            <SettingsRow inline-control>
-                <template #label>{{ formatMessage(messages.showProgress) }}</template>
-                <template #description>{{
-                    formatMessage(messages.showProgressDescription)
-                }}</template>
-                <template #control
-                    ><Toggle
-                        id="log-share-show-progress"
-                        :model-value="settings.show_progress"
-                        :disabled="saving"
-                        @update:model-value="updateShare({ show_progress: !!$event })"
-                /></template>
-            </SettingsRow>
-        </SettingsSection>
-    </div>
+            <template v-if="providers.length">
+                <SettingsRow>
+                    <template #label>{{ formatMessage(messages.provider) }}</template>
+                    <template #control>
+                        <Combobox
+                            id="crash-analysis-ai-provider"
+                            :model-value="aiSettings.provider_id"
+                            :options="providerOptions"
+                            :disabled="saving"
+                            @update:model-value="updateProvider(String($event))"
+                        />
+                    </template>
+                </SettingsRow>
+                <SettingsRow>
+                    <template #label>{{ formatMessage(messages.model) }}</template>
+                    <template #control>
+                        <Combobox
+                            id="crash-analysis-ai-model"
+                            :model-value="aiSettings.model_id"
+                            :options="modelOptions"
+                            :disabled="saving || !aiSettings.provider_id"
+                            @update:model-value="updateModel(String($event))"
+                        />
+                    </template>
+                </SettingsRow>
+            </template>
+            <p v-else class="m-0 p-4 text-sm text-[var(--color-text-tertiary)]">
+                {{ formatMessage(messages.noProviders) }}
+            </p>
+        </template>
+        <SettingsRow>
+            <template #label>{{ formatMessage(messages.autoUpload) }}</template>
+            <template #description>{{ formatMessage(messages.autoUploadDescription) }}</template>
+            <template #control>
+                <Toggle
+                    id="log-share-auto-upload"
+                    :model-value="settings.auto_upload"
+                    :disabled="saving || !noStorageEnabled || settings.no_storage"
+                    @update:model-value="updateShare({ auto_upload: !!$event })"
+                />
+            </template>
+        </SettingsRow>
+        <SettingsRow>
+            <template #label>{{ formatMessage(messages.multiFile) }}</template>
+            <template #description>{{ formatMessage(messages.multiFileDescription) }}</template>
+            <template #control>
+                <Toggle
+                    id="log-share-multi-file"
+                    :model-value="settings.multi_file"
+                    :disabled="saving"
+                    @update:model-value="updateShare({ multi_file: !!$event })"
+                />
+            </template>
+        </SettingsRow>
+        <SettingsRow>
+            <template #label>{{ formatMessage(messages.noStorage) }}</template>
+            <template #description>{{ formatMessage(messages.noStorageDescription) }}</template>
+            <template #control>
+                <Toggle
+                    id="log-share-no-storage"
+                    :model-value="settings.no_storage"
+                    :disabled="saving || !noStorageEnabled"
+                    @update:model-value="updateShare({ no_storage: !!$event })"
+                />
+            </template>
+        </SettingsRow>
+        <SettingsRow>
+            <template #label>{{ formatMessage(messages.showProgress) }}</template>
+            <template #description>{{ formatMessage(messages.showProgressDescription) }}</template>
+            <template #control>
+                <Toggle
+                    id="log-share-show-progress"
+                    :model-value="settings.show_progress"
+                    :disabled="saving"
+                    @update:model-value="updateShare({ show_progress: !!$event })"
+                />
+            </template>
+        </SettingsRow>
+    </SettingsSection>
 </template>

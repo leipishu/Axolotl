@@ -48,7 +48,6 @@ struct WikiEntry {
     /// number in `WikiEntries.txt`; empty lines reserve the IDs of entries
     /// without a platform slug.
     wiki_id: u32,
-    variant_index: usize,
     chinese_name: Option<String>,
     curseforge_slug: Option<String>,
     modrinth_slug: Option<String>,
@@ -203,7 +202,7 @@ pub fn lookup_content_identities(
         if requested_mr.is_none() && requested_cf.is_none() {
             continue;
         }
-        let key = format!("mapping:{}:{}", entry.wiki_id, entry.variant_index);
+        let key = format!("mapping:{}", entry.wiki_id);
         let counterparts = vec![
             ContentIdentityCounterpart {
                 provider: "curseforge".to_string(),
@@ -611,7 +610,7 @@ fn parse_wiki_entries(source: &str) -> Vec<WikiEntry> {
         }
         let wiki_id = line_index as u32 + 1;
         let popularity = popularity_iter.next().unwrap_or_default();
-        for (variant_index, raw_entry) in line.split('¨').enumerate() {
+        for raw_entry in line.split('¨') {
             let mut parts = raw_entry.split('|');
             let slugs = parts.next().unwrap_or_default();
             let final_part = parts.next_back();
@@ -634,7 +633,6 @@ fn parse_wiki_entries(source: &str) -> Vec<WikiEntry> {
             });
             results.push(WikiEntry {
                 wiki_id,
-                variant_index,
                 chinese_name,
                 curseforge_slug,
                 modrinth_slug,
@@ -1124,25 +1122,6 @@ mod tests {
     }
 
     #[test]
-    fn cross_platform_identities_keep_mcmod_subvariants_separate() {
-        let lookup = lookup_content_identities(
-            &["itemphysic".to_string(), "itemphysic-lite".to_string()],
-            &["itemphysic".to_string(), "itemphysic-lite".to_string()],
-        );
-        for slug in ["itemphysic", "itemphysic-lite"] {
-            assert_eq!(lookup.modrinth[slug].len(), 1);
-            assert_eq!(
-                lookup.modrinth[slug][0].key,
-                lookup.curseforge[slug][0].key
-            );
-        }
-        assert_ne!(
-            lookup.modrinth["itemphysic"][0].key,
-            lookup.curseforge["itemphysic-lite"][0].key
-        );
-    }
-
-    #[test]
     fn wiki_id_index_prefers_more_popular_entries_for_duplicate_slugs() {
         let entries = parse_wiki_entries("dup@|旧名\ndup@|新名\n001002");
         let index = build_wiki_id_index(&entries);
@@ -1241,7 +1220,6 @@ mod tests {
     fn removes_words_that_can_be_composed_from_shorter_words() {
         let entry = WikiEntry {
             wiki_id: 1,
-            variant_index: 0,
             chinese_name: Some("末影接口 (Ender IO EnderIO)".to_string()),
             curseforge_slug: Some("ender-io-enderio".to_string()),
             modrinth_slug: None,

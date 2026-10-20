@@ -1,5 +1,3 @@
-import { LRUCache } from 'lru-cache'
-
 import { get_project_many, get_version_many } from './cache.js'
 import {
     getCurseForgeChangelog,
@@ -24,13 +22,9 @@ export interface UpgradeVersionMetadata extends UpgradeVersionDisplayMetadata {
     changelog: string | null
 }
 
-const displayCache = new LRUCache<string, UpgradeVersionDisplayMetadata>({ max: 2048 })
-const changelogCache = new LRUCache<string, UpgradeVersionMetadata>({
-    max: 200,
-    maxSize: 4 * 1024 * 1024,
-    sizeCalculation: (value, key) => Math.max(1, (JSON.stringify(value).length + key.length) * 2),
-})
-const projectDisplayCache = new LRUCache<string, UpgradeProjectDisplayMetadata>({ max: 2048 })
+const displayCache = new Map<string, UpgradeVersionDisplayMetadata>()
+const changelogCache = new Map<string, UpgradeVersionMetadata>()
+const projectDisplayCache = new Map<string, UpgradeProjectDisplayMetadata>()
 
 export interface UpgradeProjectIdentity {
     provider: 'modrinth' | 'curseforge'
@@ -55,15 +49,11 @@ export async function loadUpgradeProjectDisplayMetadata(identities: UpgradeProje
             ]),
         ).values(),
     ]
-    const result = new Map<string, UpgradeProjectDisplayMetadata>()
-    for (const identity of unique) {
-        const key = upgradeProjectDisplayCacheKey(identity.provider, identity.projectId)
-        const cached = projectDisplayCache.get(key)
-        if (cached) result.set(key, cached)
-    }
     const missing = unique.filter(
         (identity) =>
-            !result.has(upgradeProjectDisplayCacheKey(identity.provider, identity.projectId)),
+            !projectDisplayCache.has(
+                upgradeProjectDisplayCacheKey(identity.provider, identity.projectId),
+            ),
     )
     const modrinthIds = missing
         .filter((identity) => identity.provider === 'modrinth')
@@ -81,30 +71,27 @@ export async function loadUpgradeProjectDisplayMetadata(identities: UpgradeProje
         curseForgeIds.length ? getCurseForgeProjects(curseForgeIds).catch(() => []) : [],
     ])
     for (const project of modrinthProjects) {
-        const key = upgradeProjectDisplayCacheKey('modrinth', project.id)
-        const metadata = {
+        projectDisplayCache.set(upgradeProjectDisplayCacheKey('modrinth', project.id), {
             title: project.title,
             iconUrl: project.icon_url ?? null,
-        }
-        result.set(key, metadata)
-        projectDisplayCache.set(key, metadata)
+        })
     }
     for (const project of curseForgeProjects) {
-        const key = upgradeProjectDisplayCacheKey('curseforge', String(project.id))
-        const metadata = {
+        projectDisplayCache.set(upgradeProjectDisplayCacheKey('curseforge', String(project.id)), {
             title: project.name,
             iconUrl: getCurseForgeImageUrl(project.logo?.thumbnailUrl ?? project.logo?.url) ?? null,
-        }
-        result.set(key, metadata)
-        projectDisplayCache.set(key, metadata)
+        })
     }
-    return result
+    return new Map(
+        unique.flatMap((identity) => {
+            const key = upgradeProjectDisplayCacheKey(identity.provider, identity.projectId)
+            const value = projectDisplayCache.get(key)
+            return value ? [[key, value] as const] : []
+        }),
+    )
 }
 
-async function loadCurseForgeDisplayMetadata(
-    identities: UpgradeReleaseIdentity[],
-    result: Map<string, UpgradeVersionDisplayMetadata>,
-) {
+async function loadCurseForgeDisplayMetadata(identities: UpgradeReleaseIdentity[]) {
     const queue = [...identities]
     await Promise.all(
         Array.from({ length: Math.min(4, queue.length) }, async () => {
@@ -113,17 +100,17 @@ async function loadCurseForgeDisplayMetadata(
                     Number(identity.projectId),
                     Number(identity.releaseId),
                 )
-                const key = upgradeVersionCacheKey(
-                    identity.provider,
-                    identity.projectId,
-                    identity.releaseId,
+                displayCache.set(
+                    upgradeVersionCacheKey(
+                        identity.provider,
+                        identity.projectId,
+                        identity.releaseId,
+                    ),
+                    {
+                        version: file.displayName ?? file.fileName ?? identity.releaseId,
+                        channel: file.releaseType,
+                    },
                 )
-                const metadata = {
-                    version: file.displayName ?? file.fileName ?? identity.releaseId,
-                    channel: file.releaseType,
-                }
-                result.set(key, metadata)
-                displayCache.set(key, metadata)
             }
         }),
     )
@@ -138,19 +125,9 @@ export async function loadUpgradeVersionDisplayMetadata(identities: UpgradeRelea
             ]),
         ).values(),
     ]
-    const result = new Map<string, UpgradeVersionDisplayMetadata>()
-    for (const identity of unique) {
-        const key = upgradeVersionCacheKey(
-            identity.provider,
-            identity.projectId,
-            identity.releaseId,
-        )
-        const cached = displayCache.get(key)
-        if (cached) result.set(key, cached)
-    }
     const missing = unique.filter(
         (identity) =>
-            !result.has(
+            !displayCache.has(
                 upgradeVersionCacheKey(identity.provider, identity.projectId, identity.releaseId),
             ),
     )
@@ -166,24 +143,29 @@ export async function loadUpgradeVersionDisplayMetadata(identities: UpgradeRelea
         const byId = new Map(versions.map((version) => [version.id, version]))
         for (const identity of modrinth) {
             const version = byId.get(identity.releaseId)
+            displayCache.set(
+                upgradeVersionCacheKey(identity.provider, identity.projectId, identity.releaseId),
+                {
+                    version: version?.version_number ?? identity.releaseId,
+                    channel: version?.version_type,
+                },
+            )
+        }
+    }
+    await loadCurseForgeDisplayMetadata(
+        missing.filter((identity) => identity.provider === 'curseforge'),
+    )
+    return new Map(
+        unique.flatMap((identity) => {
             const key = upgradeVersionCacheKey(
                 identity.provider,
                 identity.projectId,
                 identity.releaseId,
             )
-            const metadata = {
-                version: version?.version_number ?? identity.releaseId,
-                channel: version?.version_type,
-            }
-            result.set(key, metadata)
-            displayCache.set(key, metadata)
-        }
-    }
-    await loadCurseForgeDisplayMetadata(
-        missing.filter((identity) => identity.provider === 'curseforge'),
-        result,
+            const value = displayCache.get(key)
+            return value ? [[key, value] as const] : []
+        }),
     )
-    return result
 }
 
 export async function loadUpgradeVersionMetadata(
@@ -207,7 +189,7 @@ export async function loadUpgradeVersionMetadata(
             channel: version?.version_type,
             changelog: version?.changelog ?? null,
         }
-        displayCache.set(key, { version: result.version, channel: result.channel })
+        displayCache.set(key, result)
         changelogCache.set(key, result)
         return result
     }
@@ -221,7 +203,7 @@ export async function loadUpgradeVersionMetadata(
             channel: file.releaseType,
             changelog: changelog || null,
         }
-        displayCache.set(key, { version: result.version, channel: result.channel })
+        displayCache.set(key, result)
         changelogCache.set(key, result)
         return result
     }

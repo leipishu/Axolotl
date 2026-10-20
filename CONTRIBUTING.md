@@ -33,8 +33,6 @@
 ```powershell
 # 品牌名和文本合规检查
 pnpm axolotl:brand-guard
-# Agent 指令与 Skills 完整性检查
-pnpm axolotl:check-agents
 # 国际化词条检查
 pnpm axolotl:i18n-check
 # 前端格式化及 lint
@@ -105,9 +103,9 @@ node scripts/axolotl/downgrade-app-db.mjs --suffix pr538 --to 20260903120000 --a
 
 脚本的几条硬性约束，遇到时请照提示处理而不是绕过：
 
-- 只认识登记在案的迁移结构。遇到未登记的迁移会**拒绝执行**，因为删掉记录却留下它建的 schema 对象，会让重新安装该构建时因对象重复而失败。开发与 CI 中应补齐登记，不得用 `--allow-unmapped` 绕过。
+- 只认识登记在案的迁移结构。遇到未登记的迁移会**拒绝执行**，因为删掉记录却留下它建的列/表，会让重新安装该构建时因对象重复而失败；确认无碍时用 `--allow-unmapped` 显式放行。
 - 若某个已登记迁移对应的列在库里不存在，说明登记的表结构与数据库不符（版本号被复用、列被改名等），脚本同样拒绝执行。
-- 迁移维护的完整约束以 [app-lib 指令](packages/app-lib/AGENTS.md#database-migration-safety) 为准。降级脚本使用 `REVERTIBLE_SCHEMA` 登记新增列、表以及独立索引和触发器；数据迁移也要登记空对象 `{}`。修改迁移或映射后运行 `node scripts/axolotl/downgrade-app-db.test.mjs`。
+- 新增**列**的迁移时，请在 `scripts/axolotl/downgrade-app-db.mjs` 的 `REVERTIBLE_COLUMNS` 里登记它建的每一列，否则越过它的降级会被拒绝。只做数据增删（DELETE/UPDATE）的迁移也要登记一个空数组——它没有列可删，但登记了才不会挡住降级。新增**表**的迁移目前没有登记机制，只能手工处理。
 
 该脚本依赖 Node 内置的 `node:sqlite`，并要求 Windows（解析默认数据目录需要 `APPDATA`；其他平台请用 `--db` 指定路径）。
 

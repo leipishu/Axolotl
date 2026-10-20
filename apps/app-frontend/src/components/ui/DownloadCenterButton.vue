@@ -53,21 +53,7 @@
                     </span>
                 </div>
                 <div
-                    v-if="downloadManager.initializationState.value === 'loading'"
-                    class="flex flex-col gap-2 p-2"
-                    aria-hidden="true"
-                >
-                    <div class="h-4 w-3/4 animate-pulse rounded bg-surface-4" />
-                    <div class="h-2 w-full animate-pulse rounded bg-surface-4" />
-                </div>
-                <Button
-                    v-else-if="downloadManager.initializationState.value === 'error'"
-                    @click="retryInitialization"
-                >
-                    {{ formatMessage(commonMessages.retryButton) }}
-                </Button>
-                <div
-                    v-else-if="activeJobs.length"
+                    v-if="activeJobs.length"
                     class="flex max-h-[24rem] flex-col gap-1 overflow-auto"
                 >
                     <div
@@ -150,8 +136,6 @@
 <script setup lang="ts">
 import { DownloadIcon, LoaderCircleIcon, XIcon } from '@modrinth/assets'
 import {
-    Button,
-    commonMessages,
     defineMessages,
     injectNotificationManager,
     PopoutMenu,
@@ -176,9 +160,6 @@ const formatBytes = useFormatBytes()
 const router = useRouter()
 const downloadManager = injectDownloadManager()
 const { handleError } = injectNotificationManager()
-function retryInitialization() {
-    void downloadManager.start().catch(handleError)
-}
 const cancelingJobs = ref(new Set<string>())
 const open = ref(false)
 

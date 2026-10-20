@@ -8,7 +8,6 @@ import {
     wait_for_install_job,
 } from '@/helpers/install'
 import { get, get_install_candidates } from '@/helpers/instance'
-import { resourceReleaseDocuments, resourceReleases } from '@/helpers/resources'
 
 import { createContentInstall } from './content-install'
 
@@ -20,11 +19,6 @@ vi.mock('@modrinth/ui', () => ({
     useVIntl: () => ({
         formatMessage: (message: { defaultMessage: string }) => message.defaultMessage,
     }),
-}))
-vi.mock('@/helpers/resources.ts', async (original) => ({
-    ...(await original<typeof import('@/helpers/resources')>()),
-    resourceReleases: vi.fn(),
-    resourceReleaseDocuments: vi.fn(),
 }))
 vi.mock('@/store/state', () => ({ useTheming: () => ({ getFeatureFlag: () => false }) }))
 vi.mock('@/helpers/analytics', () => ({ trackEvent: vi.fn() }))
@@ -388,98 +382,4 @@ it('direct instance installation settles the caller when resource review is canc
     const missing = vi.fn()
     await context.install('abcdefgh', 'release', 'missing', 'test', missing)
     expect(missing).toHaveBeenCalledExactlyOnceWith()
-})
-
-it('CF install target selection includes compatible files from the second source page', async () => {
-    vi.clearAllMocks()
-    const actual =
-        await vi.importActual<typeof import('@/helpers/curseforge')>('@/helpers/curseforge')
-    vi.mocked(getCurseForgeFiles).mockImplementation(actual.getCurseForgeFiles)
-    vi.mocked(getCurseForgeProject).mockResolvedValue({
-        id: 42,
-        name: 'Many releases',
-        slug: 'many',
-        classId: 6,
-        authors: [],
-    } as never)
-    const page = (ids: number[], cursor: string | null) =>
-        ({
-            entries: ids.map((id) => ({
-                reference: {
-                    project: { source: 'curseforge', projectId: '42' },
-                    releaseId: String(id),
-                },
-            })),
-            cursor,
-            hasMore: cursor !== null,
-            total: { value: 51, precision: 'exact' },
-            exhaustedSources: [],
-            sourceFailures: [],
-            requestId: 'test',
-        }) as Awaited<ReturnType<typeof resourceReleases>>
-    vi.mocked(resourceReleases)
-        .mockResolvedValueOnce(
-            page(
-                Array.from({ length: 50 }, (_, i) => i + 1),
-                'next',
-            ),
-        )
-        .mockResolvedValueOnce(page([51], null))
-    vi.mocked(resourceReleaseDocuments).mockImplementation(
-        async (_source, ids) =>
-            ids.map((id) => ({
-                protocol: {
-                    id: Number(id),
-                    modId: 42,
-                    isAvailable: true,
-                    displayName: id,
-                    fileName: `${id}.jar`,
-                    releaseType: 1,
-                    fileDate: '2026-01-01',
-                    gameVersions: Number(id) === 51 ? ['1.20.1', 'Fabric'] : ['1.21.1', 'Forge'],
-                    fileLength: 100,
-                    hashes: [],
-                    dependencies: [],
-                },
-            })) as Awaited<ReturnType<typeof resourceReleaseDocuments>>,
-    )
-    vi.mocked(get_install_candidates).mockResolvedValue([
-        {
-            id: 'old-instance',
-            name: 'Old',
-            game_version: '1.20.1',
-            loader: 'fabric',
-            installed: false,
-            compatible: true,
-        },
-    ] as never)
-    const { context } = installationContext()
-    const showInstallSelection = vi.fn().mockResolvedValue(null)
-    context.setResourceInstallPreview({ showInstallSelection } as never)
-    await context.installCurseForge('42')
-    expect(resourceReleases).toHaveBeenCalledTimes(2)
-    expect(get_install_candidates).toHaveBeenCalledWith(
-        'curseforge:42',
-        'mod',
-        expect.arrayContaining([
-            expect.objectContaining({ game_version: '1.20.1', loader: 'fabric' }),
-        ]),
-    )
-    await context.handleInstallToInstance(context.instances.value[0])
-    expect(showInstallSelection).toHaveBeenCalledWith(
-        expect.objectContaining({
-            selections: expect.arrayContaining([
-                expect.objectContaining({
-                    release: {
-                        kind: 'release',
-                        reference: {
-                            project: { source: 'curseforge', projectId: '42' },
-                            releaseId: '51',
-                        },
-                    },
-                }),
-            ]),
-        }),
-    )
-    context.handleCancel()
 })

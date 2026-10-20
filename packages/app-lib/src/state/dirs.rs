@@ -172,8 +172,8 @@ impl DirectoryInfo {
 
     /// Gets the directory of a managed dedicated server by id
     #[inline]
-    pub fn server_dir(&self, server_id: &str) -> crate::Result<PathBuf> {
-        crate::util::io::safe_relative_join(&self.servers_dir(), server_id)
+    pub fn server_dir(&self, server_id: &str) -> PathBuf {
+        self.servers_dir().join(server_id)
     }
 
     #[inline]
@@ -722,28 +722,6 @@ mod resolve_game_dir_tests {
             settings_dir: PathBuf::from(r"C:\launcher\settings"),
             config_dir: PathBuf::from(r"C:\launcher"),
             app_identifier: "test".to_string(),
-        }
-    }
-
-    #[test]
-    fn server_directory_rejects_absolute_and_windows_alias_paths() {
-        let dirs = dirs();
-        assert_eq!(
-            dirs.server_dir("server-1234").unwrap(),
-            dirs.servers_dir().join("server-1234")
-        );
-        for id in [
-            "../outside",
-            "C:outside",
-            "C:/outside",
-            r"\outside",
-            r"\\server\share",
-            ".",
-            "NUL",
-            "server:stream",
-            "server.",
-        ] {
-            assert!(dirs.server_dir(id).is_err(), "{id:?}");
         }
     }
 

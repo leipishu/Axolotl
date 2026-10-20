@@ -48,7 +48,6 @@ pub(crate) enum H2DownloadFailure {
     Ineligible(&'static str),
     Connect,
     Tls,
-    /// H2 transfer failure with unknown scope; never proves connection failure.
     Protocol,
     Http,
     RangeUnsupported,
@@ -60,7 +59,7 @@ pub(crate) enum H2DownloadFailure {
 
 impl H2DownloadFailure {
     pub(crate) const fn should_cooldown_authority(self) -> bool {
-        matches!(self, Self::Protocol | Self::Slow)
+        matches!(self, Self::Protocol)
     }
 
     pub(crate) const fn is_transfer_failure(self) -> bool {
@@ -278,21 +277,8 @@ pub(crate) async fn try_download_via_h2(
     match result {
         Ok(result) => H2DownloadOutcome::Completed(result),
         Err(error) => {
-            if request
-                .cancellation
-                .as_ref()
-                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
-            {
-                return H2DownloadOutcome::Canceled;
-            }
             connection.record_stream_failure();
             let failure = classify_download_error(&error);
-            match failure {
-                H2DownloadFailure::Slow | H2DownloadFailure::Protocol => {
-                    connection.retire();
-                }
-                _ => {}
-            }
             tracing::debug!(
                 url = %fetch::sanitize_url_for_log(&request.url),
                 error = %error,
@@ -301,10 +287,7 @@ pub(crate) async fn try_download_via_h2(
             H2DownloadOutcome::Fallback {
                 failure,
                 preserve_partial: integrity.supports_resume()
-                    && matches!(
-                        failure,
-                        H2DownloadFailure::Protocol | H2DownloadFailure::Slow
-                    ),
+                    && matches!(failure, H2DownloadFailure::Protocol),
             }
         }
     }
@@ -527,49 +510,11 @@ async fn single_stream(
     let mut downloaded = 0_u64;
     let activity = super::h2_receive::H2TransferActivity::begin();
     let mut progress_gate = super::h2_receive::H2ProgressGate::new(total_size);
-    let mut slow_policy = super::native_slow::NativeSlowPolicy::for_http2(
-        0,
-        policy.expected_speed,
-    );
-    let transfer_started = Instant::now();
-    let mut timer = tokio::time::interval(Duration::from_millis(250));
-    timer.tick().await;
+    let mut slow_policy =
+        super::native_slow::NativeSlowPolicy::new(0, policy.expected_speed);
     loop {
-        let chunk = tokio::select! {
-            chunk = super::h2_receive::receive_chunk(&mut stream, "file") => chunk?,
-            _ = async {
-                match &request.cancellation {
-                    Some(token) => token.cancelled().await,
-                    None => std::future::pending().await,
-                }
-            } => return Err(crate::ErrorKind::OtherError("download canceled".into()).into()),
-            _ = timer.tick(), if policy.abort_if_slow => {
-                if progress_gate.should_report(downloaded, total_size) {
-                    record_install_progress(request, downloaded, total_size).await;
-                }
-                let decision = slow_policy.observe_with_pressure(
-                    downloaded,
-                    total_size.saturating_sub(downloaded),
-                    super::local_resources::pressure(part_path),
-                );
-                if matches!(decision, super::native_slow::SlowDecision::Probe { .. }
-                    | super::native_slow::SlowDecision::Idle { .. }) {
-                    tracing::warn!(
-                        url = %fetch::sanitize_url_for_log(&route.url),
-                        http_version = "HTTP/2",
-                        remote_addr = ?connection.remote_addr,
-                        downloaded_bytes = downloaded,
-                        elapsed_ms = transfer_started.elapsed().as_millis(),
-                        reason = ?decision,
-                        "Native HTTP/2 download stayed slow; falling back to HTTP/1.1"
-                    );
-                    return Err(crate::ErrorKind::NetworkError(
-                        "HTTP/2 single stream stayed below expectation".into(),
-                    ).into());
-                }
-                continue;
-            }
-        };
+        let chunk =
+            super::h2_receive::receive_chunk(&mut stream, "file").await?;
         let Some(chunk) = chunk else {
             break;
         };
@@ -585,6 +530,22 @@ async fn single_stream(
         super::h2_receive::release_capacity(&mut stream, chunk.len())?;
         if progress_gate.should_report(downloaded, total_size) {
             record_install_progress(request, downloaded, total_size).await;
+        }
+        if policy.abort_if_slow
+            && matches!(
+                slow_policy.observe_with_pressure(
+                    downloaded,
+                    total_size.saturating_sub(downloaded),
+                    super::local_resources::pressure(part_path),
+                ),
+                super::native_slow::SlowDecision::Probe { .. }
+                    | super::native_slow::SlowDecision::Idle { .. }
+            )
+        {
+            return Err(crate::ErrorKind::NetworkError(
+                "HTTP/2 single stream stayed below expectation".to_string(),
+            )
+            .into());
         }
     }
     super::local_resources::write(part_path, 0, file.flush()).await?;
@@ -769,13 +730,6 @@ impl AssetBatchConnectionGroup {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn slow_h2_transfers_cool_down_the_authority() {
-        assert!(H2DownloadFailure::Slow.should_cooldown_authority());
-        assert!(H2DownloadFailure::Protocol.should_cooldown_authority());
-        assert!(!H2DownloadFailure::Http.should_cooldown_authority());
-    }
 
     #[tokio::test]
     async fn committed_asset_recovers_a_legacy_copy_without_redownloading() {
